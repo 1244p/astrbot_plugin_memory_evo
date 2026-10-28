@@ -74,6 +74,23 @@
     "type": "float",
     "default": 0.5
   },
+  "semantic_recall": {
+    "description": "语义召回",
+    "type": "bool",
+    "hint": "有 embedding provider 时用向量相似度召回，失败自动退回字面匹配。",
+    "default": true
+  },
+  "embedding_provider_id": {
+    "description": "Embedding 提供商 ID",
+    "type": "string",
+    "hint": "留空则自动使用第一个可用的 embedding 提供商。",
+    "default": ""
+  },
+  "embedding_timeout": {
+    "description": "Embedding 请求超时（秒）",
+    "type": "int",
+    "default": 10
+  },
   "min_confidence": {
     "description": "注入所需最低置信度",
     "type": "float",

@@ -71,9 +71,13 @@ def _install_stubs(tmpdir: str) -> None:
     class Context:
         def __init__(self):
             self.provider = None
+            self.embedding_providers = []
 
         def get_provider_by_id(self, _id):
-            return self.provider
+            return None
+
+        def get_all_embedding_providers(self):
+            return list(self.embedding_providers)
 
         async def get_using_provider_async(self, _umo=None):
             return self.provider
@@ -121,6 +125,26 @@ class FakeProvider:
     async def text_chat(self, prompt=None, system_prompt=None, **kw):
         self.calls += 1
         return provider_stub.LLMResponse(completion_text=self.payload)
+
+
+class FakeEmbedder:
+    """最小 embedding provider 替身。"""
+
+    def __init__(self, vec=None):
+        self.provider_config = {"id": "emb"}
+        self.vec = vec or [1.0, 0.0]
+        self.calls = 0
+
+    def get_model(self):
+        return "fake-1"
+
+    async def get_embedding(self, text):
+        self.calls += 1
+        return list(self.vec)
+
+    async def get_embeddings(self, texts):
+        self.calls += len(texts)
+        return [list(self.vec) for _ in texts]
 
 
 class FakeEvent:
@@ -190,6 +214,23 @@ class HookTest(unittest.TestCase):
         self.plugin.store.upsert_fact("aiocqhttp:FriendMessage:1", "用户", "宠物", "养了两只猫")
         out = asyncio.run(self.plugin.tool_search(FakeEvent(text="猫"), "宠物", 5))
         self.assertIn("养了两只猫", out)
+
+    def test_semantic_injection_finds_paraphrase(self):
+        emb = FakeEmbedder()
+        self.plugin.context.embedding_providers = [emb]
+        self.plugin._emb_resolved = False
+        self.plugin._embedder()
+        fid, _ = self.plugin.store.upsert_fact(
+            "aiocqhttp:FriendMessage:1", "用户", "饮食", "不吃香菜"
+        )
+        self.plugin.store.save_embedding("aiocqhttp:FriendMessage:1", fid, [1.0, 0.0], self.plugin._emb_model)
+
+        req = provider_stub.ProviderRequest()
+        asyncio.run(self.plugin.inject_memory(FakeEvent(text="闻着就反胃"), req))
+        text = req.extra_user_content_parts[0].text
+        self.assertIn("<memory>", text)
+        self.assertIn("香菜", text)
+        self.assertGreater(emb.calls, 0)
 
     def test_write_then_forget(self):
         asyncio.run(self.plugin.tool_write(FakeEvent(), "用户对花生过敏", "profile", 5))

@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.2.0-blue)
+![version](https://img.shields.io/badge/version-v0.3.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -31,7 +31,8 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 
 ## 特性
 
-- **零依赖**：标准库 + SQLite（WAL），没有向量库、没有 embedding、没有外部服务
+- **零依赖**：标准库 + SQLite（WAL），没有向量库、没有外部服务；语义召回借用 AstrBot 已有的 embedding provider
+- **语义召回**：配了 embedding 就用余弦相似度，「闻着就反胃」也能命中「不吃香菜」；没配 / 失败自动退回字面匹配
 - **事实级记忆**：谓词按槽位归一（饮食偏好 / 忌口 / 口味 → `饮食`），同槽位只留一条有效值；改主意时旧值保留为历史
 - **置信度门控**：置信度低于阈值（默认 0.45）且不重要的抽取结果只入库、不注入，抽错不会立刻当真
 - **矛盾检测**：「爱吃香菜」遇上「不吃香菜」→ 两条都标记待确认，默认都不注入，等 `/memory confirm` 裁决
@@ -95,15 +96,22 @@ flowchart TD
 召回不用向量，用四个信号线性组合：
 
 ```
-score = 0.50 × 字面相关     # CJK 单字+双字、拉丁按词的重叠率
+# 有向量（配了 embedding provider）
+score = 0.50 × 余弦相似度
       + 0.20 × 新近度       # 0.5 ^ (天数 / 半衰期)，半衰期按类型分档
       + 0.20 × 重要度       # importance / 5
-      + 0.10 × 置信度       # 抽取时的 confidence
+      + 0.10 × 置信度
+
+# 没有向量（未配置 / 调用失败 / 维度或模型不匹配）
+score = 0.50 × 字面相关     # CJK 单字+双字、拉丁按词的重叠率
+      + 同样的三项
 
 半衰期：preference 30d / profile 60d / fact 14d / event 7d / task 1d
 门控：confidence < 0.45 且 importance < 5 → 不注入
 多样性：同一槽位 ≤ 2 条，单条 ≤ 80 字
 ```
+
+两条路共用同一套权重，所以「换召回方式」不会让行为突变。向量在写入时算一次、L2 归一化后以 float32 存进 `facts.embedding`；查询时把 query 也归一化，点积即余弦。历史数据靠后台每 20 秒补一批（`/memory reindex` 可手动触发），补不上就一直走字面，不会阻塞回复。
 
 按分数降序取，边取边累加字符数，超预算就跳过继续找下一条（而不是直接截断，避免大条目吃光预算）。
 
@@ -155,7 +163,8 @@ value = clamp(value, 0.0, 1.0)
 facts(id, scope, subject, predicate, object, kind, importance,
       confidence, evidence, created_at, updated_at,
       superseded_by, last_hit_at, hits,
-      polarity, status, conflict_with)
+      polarity, status, conflict_with,
+      embedding, embedding_model)
 
 persona(scope PK, traits JSON, mood, version, updated_at)
 
@@ -193,6 +202,9 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `enable` | `true` | 总开关 |
 | `top_k` | `6` | 每轮注入条数，4~8 比较稳 |
 | `max_inject_chars` | `600` | 注入字符上限，别超过上下文窗口 10% |
+| `semantic_recall` | `true` | 语义召回总开关（无 embedding provider 时自动失效） |
+| `embedding_provider_id` | 空 | 留空用第一个可用的 embedding 提供商 |
+| `embedding_timeout` | `10` | 单次 embedding 请求超时（秒） |
 | `min_confidence` | `0.45` | 低于此值且重要度 <5 的事实只入库不注入 |
 | `include_suspect` | `false` | 是否把「待确认」冲突记忆也注入（默认不） |
 | `max_per_predicate` | `2` | 同一槽位最多注入几条 |
@@ -226,6 +238,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `/memory dump` | 列出当前会话的有效记忆 |
 | `/memory why <词>` | 查看召回打分，调 `top_k` 时必备 |
 | `/memory confirm <id>` | 确认一条待确认记忆，冲突的另一条自动归档 |
+| `/memory reindex` | 手动补写缺失的语义向量 |
 | `/memory forget <id\|词\|all>` | 删除记忆 |
 | `/memory persona` | 五维当前值 + 最近 5 次演化及理由 |
 
@@ -265,12 +278,13 @@ python -m unittest discover -s tests -v
 ```
 
 ```
-Ran 30 tests — OK
+Ran 38 tests — OK
 ```
 
 覆盖：重复事实合并、改值 supersede、会话隔离、召回排序与预算、遗忘、人格步长/边界/回归、
 JSON 容错解析、钩子注入、工具读写、flush 落库；以及 v0.2 的置信度门控、分类半衰期、
-矛盾检测与裁决、谓词归一、注入多样性、旧库自动迁移。
+矛盾检测与裁决、谓词归一、注入多样性、旧库自动迁移；以及语义召回的 paraphrase 命中、
+无向量回退、维度/模型不匹配回退、向量归一化、补写统计。
 
 目录：
 
@@ -288,7 +302,7 @@ astrbot_plugin_memory_evo/
 ## Roadmap
 
 - [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
-- [ ] 召回可选接入 embedding（只改 `store.recall`，接口不变）
+- [x] 语义召回：embedding + 余弦，失败自动回退（v0.3.0）
 - [ ] `task` / `event` 带到期时间，配合 cron 主动提一句（私聊场景收益最高）
 - [ ] 跨平台身份归一：`/memory link` 把 QQ / WebChat 的两个 umo 绑成同一个人
 - [ ] 事实超过阈值时做同槽位合并摘要
@@ -296,8 +310,11 @@ astrbot_plugin_memory_evo/
 
 ## FAQ
 
-**Q：为什么不用向量库？**
-单机小规模下，几百到几千条事实的字面匹配 + 新近度已经够用，延迟微秒级、零额外成本。等真到上万条、同义改写开始漏召回，再换 embedding——接口是同一个函数。
+**Q：用了 embedding，为什么还是不用向量库？**
+单机单人通常只有几百到几千条事实，暴力余弦一遍是毫秒级，FAISS 那套索引、维度管理、重建流程在这个量级纯属负担。等记忆上万条，再考虑换索引——`recall` 内部换实现即可，外部接口不变。
+
+**Q：没配 embedding 会怎样？**
+自动退回字面匹配，功能不受影响，只是同义改写会漏。配了之后历史数据会在后台慢慢补向量，`/memory reindex` 可以立刻补。
 
 **Q：记忆会不会越存越乱？**
 不会无限增长：同一个 `(主体, 谓词)` 只有一条有效记录，改主意是 supersede 不是堆叠。真要清理，`/memory forget all` 一条命令。

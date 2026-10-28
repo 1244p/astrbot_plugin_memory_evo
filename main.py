@@ -23,6 +23,7 @@ HELP_TEXT = (
     "/memory dump 查看记忆（⚠️ 表示待确认）\n"
     "/memory why <词> 看召回打分\n"
     "/memory confirm <id> 确认一条待确认记忆\n"
+    "/memory reindex 补写缺失语义向量\n"
     "/memory forget <id|词|all> 删除\n"
     "/memory persona 查看人格状态与演化记录"
 )
@@ -41,6 +42,10 @@ class MemoryEvoPlugin(Star):
         self.baseline = {k: float(self._get(f"baseline_{k}", 0.5)) for k in persona.TRAIT_KEYS}
         self.buffers: dict[str, deque[tuple[str, str, float]]] = {}
         self.inflight: set[str] = set()
+        self._scopes: set[str] = set()
+        self._emb_resolved = False
+        self._emb_provider = None
+        self._emb_model = ""
         self._janitor: asyncio.Task | None = None
         self._start_janitor()
 
@@ -75,6 +80,11 @@ class MemoryEvoPlugin(Star):
                         continue
                     if now - buf[-1][2] >= idle:
                         await self._flush(scope, reason="idle")
+                for scope in list(self._scopes):
+                    try:
+                        await self._backfill_embeddings(scope, limit=16)
+                    except Exception:
+                        logger.debug("[memory_evo] 向量补写失败 scope=%s", scope, exc_info=True)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -87,6 +97,82 @@ class MemoryEvoPlugin(Star):
             if provider:
                 return provider
         return await self.context.get_using_provider_async(umo)
+
+    def _embedder(self):
+        """解析 embedding provider：显式配置优先，否则取第一个可用的。"""
+        if self._emb_resolved:
+            return self._emb_provider
+        self._emb_resolved = True
+        provider = None
+        pid = str(self._get("embedding_provider_id", "") or "")
+        if pid:
+            provider = self.context.get_provider_by_id(pid)
+        if provider is None:
+            try:
+                providers = self.context.get_all_embedding_providers()
+            except Exception:
+                providers = []
+            provider = providers[0] if providers else None
+        self._emb_provider = provider
+        if provider is not None:
+            cfg_id = ""
+            try:
+                cfg_id = str(provider.provider_config.get("id", "") or "")
+            except Exception:
+                cfg_id = ""
+            model = ""
+            try:
+                model = str(provider.get_model() or "")
+            except Exception:
+                model = ""
+            self._emb_model = f"{cfg_id or pid}:{model}"
+            logger.info(f"[memory_evo] 语义召回使用 embedding: {self._emb_model}")
+        else:
+            logger.info("[memory_evo] 未配置 embedding provider，召回退回字面匹配")
+        return provider
+
+    async def _embed_texts(self, texts: list[str]) -> list[list[float]] | None:
+        provider = self._embedder()
+        if provider is None or not texts:
+            return None
+        try:
+            timeout = float(self._get("embedding_timeout", 10)) + 5
+            return await asyncio.wait_for(provider.get_embeddings(texts), timeout=timeout)
+        except Exception:
+            logger.debug("[memory_evo] 批量 embedding 失败，尝试逐条", exc_info=True)
+        out: list[list[float]] = []
+        for text in texts:
+            try:
+                out.append(await asyncio.wait_for(
+                    provider.get_embedding(text), timeout=float(self._get("embedding_timeout", 10))
+                ))
+            except Exception:
+                logger.warning("[memory_evo] embedding 失败，跳过该条")
+                return None
+        return out
+
+    async def _embed_new(self, scope: str, items: list[tuple[int, str]]) -> None:
+        if not items or not self._get("semantic_recall", True):
+            return
+        vectors = await self._embed_texts([t for _, t in items])
+        if not vectors or len(vectors) != len(items):
+            return
+        for (fact_id, _), vec in zip(items, vectors):
+            try:
+                await asyncio.to_thread(self.store.save_embedding, scope, fact_id, vec, self._emb_model)
+            except Exception:
+                logger.debug("[memory_evo] 写入向量失败 fact#%s", fact_id, exc_info=True)
+
+    async def _backfill_embeddings(self, scope: str, limit: int = 32) -> int:
+        if not self._get("semantic_recall", True):
+            return 0
+        if self._embedder() is None:
+            return 0
+        missing = await asyncio.to_thread(self.store.missing_embeddings, scope, self._emb_model, limit)
+        if not missing:
+            return 0
+        await self._embed_new(scope, missing)
+        return len(missing)
 
     async def _ask(self, umo: str, system: str, prompt: str) -> dict:
         provider = await self._provider(umo)
@@ -109,7 +195,19 @@ class MemoryEvoPlugin(Star):
         self._start_janitor()
         scope = event.unified_msg_origin
         text = event.message_str or ""
+        self._scopes.add(scope)
         blocks: list[str] = []
+
+        query_vec = None
+        if text and self._get("semantic_recall", True) and self._embedder() is not None:
+            try:
+                query_vec = await asyncio.wait_for(
+                    self._emb_provider.get_embedding(text),
+                    timeout=float(self._get("embedding_timeout", 10)),
+                )
+            except Exception:
+                logger.debug("[memory_evo] query embedding 失败，本轮退回字面匹配", exc_info=True)
+                query_vec = None
 
         if text:
             self._remember_turn(scope, "user", text)
@@ -124,6 +222,8 @@ class MemoryEvoPlugin(Star):
                 bool(self._get("include_suspect", False)),
                 int(self._get("max_per_predicate", 2)),
                 int(self._get("max_item_chars", 80)),
+                query_vec,
+                self._emb_model if query_vec else None,
             )
             if facts:
                 lines = [f"- {f.subject}|{f.predicate}：{f.object}" for f in facts]
@@ -186,6 +286,7 @@ class MemoryEvoPlugin(Star):
                 extractor.FACT_SYSTEM,
                 extractor.FACT_PROMPT.replace("__TRANSCRIPT__", transcript),
             )
+            pending_embeddings: list[tuple[int, str]] = []
             for fact in extractor.sanitize_facts(data):
                 fact_id, action = await asyncio.to_thread(
                     self.store.upsert_fact,
@@ -198,7 +299,11 @@ class MemoryEvoPlugin(Star):
                     fact["confidence"],
                     fact["evidence"],
                 )
+                pending_embeddings.append(
+                    (fact_id, f"{fact['subject']} {fact['predicate']} {fact['object']}")
+                )
                 logger.debug(f"[memory_evo] fact#{fact_id} {action} ({reason}) scope={scope}")
+            await self._embed_new(scope, pending_embeddings)
 
             if self._get("persona_evolve", True):
                 pens = await self._ask(
@@ -347,6 +452,14 @@ class MemoryEvoPlugin(Star):
             else:
                 count = await asyncio.to_thread(self.store.forget_matching, scope, arg)
             yield event.plain_result(f"已删除 {count} 条。")
+            return
+
+        if sub == "reindex":
+            added = await self._backfill_embeddings(scope, limit=64)
+            done, total = await asyncio.to_thread(
+                self.store.embedding_stats, scope, self._emb_model
+            )
+            yield event.plain_result(f"本轮补写 {added} 条向量，已覆盖 {done}/{total}。")
             return
 
         if sub == "persona":

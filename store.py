@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import time
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +29,9 @@ CREATE TABLE IF NOT EXISTS facts (
     hits          INTEGER NOT NULL DEFAULT 0,
     polarity      INTEGER NOT NULL DEFAULT 0,
     status        TEXT    NOT NULL DEFAULT 'active',
-    conflict_with INTEGER
+    conflict_with INTEGER,
+    embedding     BLOB,
+    embedding_model TEXT
 );
 CREATE TABLE IF NOT EXISTS persona (
     scope      TEXT PRIMARY KEY,
@@ -123,6 +127,29 @@ def analyze_object(text: str) -> tuple[int, str]:
     return polarity, core
 
 
+def _l2_normalize(vec: list[float]) -> list[float]:
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm <= 1e-12:
+        return list(vec)
+    return [v / norm for v in vec]
+
+
+def _pack(vec: list[float]) -> bytes:
+    return array("f", _l2_normalize(vec)).tobytes()
+
+
+def _unpack(blob: bytes | None) -> list[float]:
+    if not blob:
+        return []
+    return list(array("f", blob))
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    return sum(x * y for x, y in zip(a, b))
+
+
 def _cores_overlap(a: str, b: str) -> bool:
     if not a or not b:
         return False
@@ -171,6 +198,8 @@ class MemoryStore:
             ("polarity", "ALTER TABLE facts ADD COLUMN polarity INTEGER NOT NULL DEFAULT 0"),
             ("status", "ALTER TABLE facts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
             ("conflict_with", "ALTER TABLE facts ADD COLUMN conflict_with INTEGER"),
+            ("embedding", "ALTER TABLE facts ADD COLUMN embedding BLOB"),
+            ("embedding_model", "ALTER TABLE facts ADD COLUMN embedding_model TEXT"),
         ):
             if name not in cols:
                 self.conn.execute(ddl)
@@ -267,8 +296,14 @@ class MemoryStore:
         include_suspect: bool = False,
         max_per_predicate: int = 2,
         max_item_chars: int = 80,
+        query_vec: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> list[Fact]:
-        """按相关度取 top-k。低置信度（且不重要）的事实不参与注入。"""
+        """按相关度取 top-k。
+
+        有 query_vec 且该条记忆已写向量时用语义相似度，否则退回字面匹配。
+        两条路共用同一套新近度/重要度/置信度权重，所以换了召回方式行为不会突变。
+        """
         now = time.time()
         statuses = ("active", "suspect") if include_suspect else ("active",)
         placeholders = ",".join("?" for _ in statuses)
@@ -281,20 +316,40 @@ class MemoryStore:
             return []
 
         q = tokenize(query)
+        qv = _l2_normalize([float(x) for x in query_vec]) if query_vec else None
+        semantic = bool(qv)
         scored: list[Fact] = []
+
         for row in rows:
             imp = int(row["importance"])
             conf = float(row["confidence"])
             if conf < min_confidence and imp < 5:
                 continue
-            text_tokens = tokenize(f"{row['subject']} {row['predicate']} {row['object']}")
-            overlap = len(q & text_tokens) / len(q) if q else 1.0
-            if q and overlap == 0 and not (imp >= 5):
-                continue
+
+            cos = None
+            if semantic:
+                emb = _unpack(row["embedding"])
+                if emb and len(emb) == len(qv) and (
+                    embedding_model is None or row["embedding_model"] == embedding_model
+                ):
+                    cos = _cosine(qv, emb)
+
             half_life = HALF_LIFE_DAYS.get(row["kind"], DEFAULT_HALF_LIFE)
             age_days = max(0.0, (now - row["updated_at"]) / 86400)
             recency = 0.5 ** (age_days / max(0.1, half_life))
-            score = 0.5 * overlap + 0.2 * recency + 0.2 * (imp / 5.0) + 0.1 * conf
+            base = 0.2 * recency + 0.2 * (imp / 5.0) + 0.1 * conf
+
+            if cos is not None:
+                score = 0.5 * cos + base
+                relevant = cos >= 0.2 or not q or imp >= 5
+            else:
+                text_tokens = tokenize(f"{row['subject']} {row['predicate']} {row['object']}")
+                overlap = len(q & text_tokens) / len(q) if q else 1.0
+                score = 0.5 * overlap + base
+                relevant = (not q) or overlap > 0 or imp >= 5
+            if not relevant:
+                continue
+
             obj = row["object"]
             truncated = False
             if max_item_chars and len(obj) > max_item_chars:
@@ -337,6 +392,39 @@ class MemoryStore:
             self.conn.executemany("UPDATE facts SET last_hit_at=?, hits=hits+1 WHERE id=?", ids)
             self.conn.commit()
         return picked
+
+    def save_embedding(
+        self, scope: str, fact_id: int, vec: list[float], model: str
+    ) -> bool:
+        cur = self.conn.execute(
+            "UPDATE facts SET embedding=?, embedding_model=? WHERE scope=? AND id=?",
+            (_pack(vec), model, scope, fact_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def missing_embeddings(
+        self, scope: str, model: str, limit: int = 32
+    ) -> list[tuple[int, str]]:
+        rows = self.conn.execute(
+            "SELECT id, subject, predicate, object FROM facts"
+            " WHERE scope=? AND superseded_by IS NULL"
+            " AND (embedding IS NULL OR embedding_model IS NOT ?)"
+            " ORDER BY updated_at DESC LIMIT ?",
+            (scope, model, limit),
+        ).fetchall()
+        return [(int(r["id"]), f"{r['subject']} {r['predicate']} {r['object']}") for r in rows]
+
+    def embedding_stats(self, scope: str, model: str) -> tuple[int, int]:
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM facts WHERE scope=? AND superseded_by IS NULL", (scope,)
+        ).fetchone()[0]
+        done = self.conn.execute(
+            "SELECT COUNT(*) FROM facts WHERE scope=? AND superseded_by IS NULL"
+            " AND embedding IS NOT NULL AND embedding_model = ?",
+            (scope, model),
+        ).fetchone()[0]
+        return int(done), int(total)
 
     def confirm_fact(self, scope: str, fact_id: int) -> bool:
         """把「待确认」事实转正，并把冲突的那条标记为被取代。"""
