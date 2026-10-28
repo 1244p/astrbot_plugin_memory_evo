@@ -74,6 +74,30 @@
     "type": "float",
     "default": 0.5
   },
+  "min_confidence": {
+    "description": "注入所需最低置信度",
+    "type": "float",
+    "hint": "低于此值且重要度<5 的事实只入库不注入，避免抽错就当真。",
+    "default": 0.45
+  },
+  "include_suspect": {
+    "description": "注入待确认记忆",
+    "type": "bool",
+    "hint": "默认 false。开启后冲突事实也会进上下文，容易自相矛盾。",
+    "default": false
+  },
+  "max_per_predicate": {
+    "description": "同一槽位最多注入条数",
+    "type": "int",
+    "hint": "防止「饮食」类记忆占满预算。",
+    "default": 2
+  },
+  "max_item_chars": {
+    "description": "单条记忆注入最大字符",
+    "type": "int",
+    "hint": "超出截断，避免一条长记忆吃掉整个预算。",
+    "default": 80
+  },
   "flush_turns": {
     "description": "多少轮用户消息触发一次记忆抽取",
     "type": "int",

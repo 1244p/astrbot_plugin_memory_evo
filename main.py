@@ -19,6 +19,14 @@ from .store import MemoryStore
 
 PLUGIN_NAME = "astrbot_plugin_memory_evo"
 
+HELP_TEXT = (
+    "/memory dump 查看记忆（⚠️ 表示待确认）\n"
+    "/memory why <词> 看召回打分\n"
+    "/memory confirm <id> 确认一条待确认记忆\n"
+    "/memory forget <id|词|all> 删除\n"
+    "/memory persona 查看人格状态与演化记录"
+)
+
 
 class MemoryEvoPlugin(Star):
     """长期记忆 + 人格演化。只记住值得记的，人格只缓慢漂移。"""
@@ -112,6 +120,10 @@ class MemoryEvoPlugin(Star):
                 text,
                 int(self._get("top_k", 6)),
                 int(self._get("max_inject_chars", 600)),
+                float(self._get("min_confidence", 0.45)),
+                bool(self._get("include_suspect", False)),
+                int(self._get("max_per_predicate", 2)),
+                int(self._get("max_item_chars", 80)),
             )
             if facts:
                 lines = [f"- {f.subject}|{f.predicate}：{f.object}" for f in facts]
@@ -224,10 +236,27 @@ class MemoryEvoPlugin(Star):
             k(number): 返回条数，默认 6
         """
         k = max(1, min(20, int(k)))
-        facts = await asyncio.to_thread(self.store.recall, event.unified_msg_origin, query, k, 1200)
+        facts = await asyncio.to_thread(
+            self.store.recall,
+            event.unified_msg_origin,
+            query,
+            k,
+            1200,
+            float(self._get("min_confidence", 0.45)),
+            True,
+            3,
+            200,
+        )
         if not facts:
             return "没有找到相关记忆。"
-        return "\n".join(f"#{f.id} {f.subject}|{f.predicate}：{f.object}（重要度 {f.importance}）" for f in facts)
+        lines = []
+        for f in facts:
+            flag = "（待确认，用户确认后才会自动使用）" if f.status == "suspect" else ""
+            lines.append(
+                f"#{f.id} {f.subject}|{f.predicate}：{f.object}"
+                f"（重要度 {f.importance}，置信度 {f.confidence:.2f}）{flag}"
+            )
+        return "\n".join(lines)
 
     @filter.llm_tool(name="memory_write")
     async def tool_write(self, event: AstrMessageEvent, content: str, kind: str = "fact", importance: int = 3) -> str:
@@ -249,6 +278,8 @@ class MemoryEvoPlugin(Star):
             0.95,
             "模型主动写入",
         )
+        if action == "conflict":
+            return f"已记录 #{fact_id}，但与既有记忆矛盾，已标记待确认；请向用户确认以哪条为准。"
         return f"已记录 #{fact_id}（{action}）"
 
     @filter.llm_tool(name="memory_forget")
@@ -265,7 +296,7 @@ class MemoryEvoPlugin(Star):
 
     @filter.command("memory")
     async def memory_cmd(self, event: AstrMessageEvent):
-        """记忆管理：/memory [dump|why <词>|forget <id|词|all>|persona]"""
+        """记忆管理：/memory [dump|why <词>|confirm <id>|forget <id|词|all>|persona]"""
         scope = event.unified_msg_origin
         parts = (event.message_str or "").split()
         sub = parts[1].lower() if len(parts) > 1 else ""
@@ -275,10 +306,13 @@ class MemoryEvoPlugin(Star):
             if not rows:
                 yield event.plain_result("这个会话还没有记忆。")
                 return
-            body = "\n".join(
-                f"#{r['id']} [{r['kind']}] {r['subject']}|{r['predicate']}：{r['object']}" for r in rows
-            )
-            yield event.plain_result(f"共 {len(rows)} 条：\n{body}")
+            lines = []
+            for r in rows:
+                flag = "⚠️待确认 " if r["status"] == "suspect" else ""
+                lines.append(
+                    f"{flag}#{r['id']} [{r['kind']}] {r['subject']}|{r['predicate']}：{r['object']}"
+                )
+            yield event.plain_result(f"共 {len(rows)} 条：\n" + "\n".join(lines))
             return
 
         if sub == "why":
@@ -289,6 +323,15 @@ class MemoryEvoPlugin(Star):
                 return
             body = "\n".join(f"{f.score:.3f}  #{f.id} {f.predicate}：{f.object}" for f in facts)
             yield event.plain_result(f"召回打分：\n{body}")
+            return
+
+        if sub == "confirm":
+            arg = " ".join(parts[2:]).strip()
+            if not arg.isdigit():
+                yield event.plain_result("用法：/memory confirm <id>（id 见 /memory dump 里的 ⚠️）")
+                return
+            ok = await asyncio.to_thread(self.store.confirm_fact, scope, int(arg))
+            yield event.plain_result("已确认，冲突的另一条已归档。" if ok else "没有这条记忆。")
             return
 
         if sub == "forget":
@@ -316,12 +359,7 @@ class MemoryEvoPlugin(Star):
             yield event.plain_result("\n".join(body))
             return
 
-        yield event.plain_result(
-            "/memory dump 查看记忆\n"
-            "/memory why <词> 看召回打分\n"
-            "/memory forget <id|词|all> 删除\n"
-            "/memory persona 查看人格状态与演化记录"
-        )
+        yield event.plain_result(HELP_TEXT)
 
     async def terminate(self) -> None:
         if self._janitor and not self._janitor.done():

@@ -54,7 +54,7 @@ class StoreTest(unittest.TestCase):
         self.store.upsert_fact(self.scope, "用户", "喜欢的游戏", "只玩单机", importance=2)
         hits = self.store.recall(self.scope, "香菜", k=5)
         self.assertTrue(hits)
-        self.assertEqual(hits[0].predicate, "饮食偏好")
+        self.assertIn("饮食", hits[0].predicate)  # v0.2 起谓词按槽位归一
 
     def test_recall_budget(self):
         for i in range(20):

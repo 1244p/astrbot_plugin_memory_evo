@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 同时让角色的性格在几十次对话里缓慢漂移，而不是每轮重开存档。
 
-![version](https://img.shields.io/badge/version-v0.1.0-blue)
+![version](https://img.shields.io/badge/version-v0.2.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -32,7 +32,11 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 ## 特性
 
 - **零依赖**：标准库 + SQLite（WAL），没有向量库、没有 embedding、没有外部服务
-- **事实级记忆**：按 `(主体, 谓词)` 去重合并；用户改主意时旧值保留为历史，不丢失
+- **事实级记忆**：谓词按槽位归一（饮食偏好 / 忌口 / 口味 → `饮食`），同槽位只留一条有效值；改主意时旧值保留为历史
+- **置信度门控**：置信度低于阈值（默认 0.45）且不重要的抽取结果只入库、不注入，抽错不会立刻当真
+- **矛盾检测**：「爱吃香菜」遇上「不吃香菜」→ 两条都标记待确认，默认都不注入，等 `/memory confirm` 裁决
+- **分类半衰期**：偏好 30 天、画像 60 天、事件 7 天、任务 1 天，过期类记忆自然退场
+- **注入多样性**：同一槽位最多 2 条、单条最多 80 字，避免一类记忆吃光预算
 - **预算硬约束**：注入前按字符预算截断，默认 600 字符（≈400 token），不会挤爆上下文
 - **不破坏提示词缓存**：动态内容走 `extra_user_content_parts`，`system_prompt` 保持稳定
 - **会话隔离**：群聊、私聊各记各的，A 群不会串到 B 群
@@ -92,12 +96,18 @@ flowchart TD
 
 ```
 score = 0.50 × 字面相关     # CJK 单字+双字、拉丁按词的重叠率
-      + 0.20 × 新近度       # 0.5 ^ (天数 / 7)，半衰期 7 天
+      + 0.20 × 新近度       # 0.5 ^ (天数 / 半衰期)，半衰期按类型分档
       + 0.20 × 重要度       # importance / 5
       + 0.10 × 置信度       # 抽取时的 confidence
+
+半衰期：preference 30d / profile 60d / fact 14d / event 7d / task 1d
+门控：confidence < 0.45 且 importance < 5 → 不注入
+多样性：同一槽位 ≤ 2 条，单条 ≤ 80 字
 ```
 
 按分数降序取，边取边累加字符数，超预算就跳过继续找下一条（而不是直接截断，避免大条目吃光预算）。
+
+**矛盾怎么办。** 谓词先归一到槽位（`饮食偏好`、`忌口`、`口味` 都是 `饮食`），再比对新旧值的极性：「爱吃香菜」正向、「不吃香菜」反向，核心词重叠 → 两条都标 `suspect`，默认不参与注入，只在 `/memory dump` 和 `memory_search` 里以「⚠️待确认」出现，等 `/memory confirm <id>` 裁决。这样模型抽错一句，不会立刻污染人格判断。
 
 注入位置是这个插件唯一「有主见」的地方：
 
@@ -144,7 +154,8 @@ value = clamp(value, 0.0, 1.0)
 ```sql
 facts(id, scope, subject, predicate, object, kind, importance,
       confidence, evidence, created_at, updated_at,
-      superseded_by, last_hit_at, hits)
+      superseded_by, last_hit_at, hits,
+      polarity, status, conflict_with)
 
 persona(scope PK, traits JSON, mood, version, updated_at)
 
@@ -182,6 +193,10 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `enable` | `true` | 总开关 |
 | `top_k` | `6` | 每轮注入条数，4~8 比较稳 |
 | `max_inject_chars` | `600` | 注入字符上限，别超过上下文窗口 10% |
+| `min_confidence` | `0.45` | 低于此值且重要度 <5 的事实只入库不注入 |
+| `include_suspect` | `false` | 是否把「待确认」冲突记忆也注入（默认不） |
+| `max_per_predicate` | `2` | 同一槽位最多注入几条 |
+| `max_item_chars` | `80` | 单条记忆注入最大字符 |
 | `persona_inject` | `true` | 注入 `<self_state>` |
 | `persona_evolve` | `true` | 允许人格演化 |
 | `max_step` | `0.06` | 单次演化最大步长 |
@@ -210,6 +225,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `/memory` | 帮助 |
 | `/memory dump` | 列出当前会话的有效记忆 |
 | `/memory why <词>` | 查看召回打分，调 `top_k` 时必备 |
+| `/memory confirm <id>` | 确认一条待确认记忆，冲突的另一条自动归档 |
 | `/memory forget <id\|词\|all>` | 删除记忆 |
 | `/memory persona` | 五维当前值 + 最近 5 次演化及理由 |
 
@@ -249,11 +265,12 @@ python -m unittest discover -s tests -v
 ```
 
 ```
-Ran 21 tests — OK
+Ran 30 tests — OK
 ```
 
 覆盖：重复事实合并、改值 supersede、会话隔离、召回排序与预算、遗忘、人格步长/边界/回归、
-JSON 容错解析、钩子注入、工具读写、flush 落库。
+JSON 容错解析、钩子注入、工具读写、flush 落库；以及 v0.2 的置信度门控、分类半衰期、
+矛盾检测与裁决、谓词归一、注入多样性、旧库自动迁移。
 
 目录：
 
@@ -270,9 +287,10 @@ astrbot_plugin_memory_evo/
 
 ## Roadmap
 
+- [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
 - [ ] 召回可选接入 embedding（只改 `store.recall`，接口不变）
 - [ ] 群聊按 `sender_id` 再分一层，支持「群里每个人都记得住」
-- [ ] 事实超过阈值时做同谓词合并摘要
+- [ ] 事实超过阈值时做同槽位合并摘要
 - [ ] 从 `task` / `event` 记忆里取到期项，配合 cron 主动提一句
 - [ ] WebUI 管理页（浏览、编辑、回滚人格）
 
