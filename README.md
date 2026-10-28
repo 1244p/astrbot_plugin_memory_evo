@@ -8,7 +8,7 @@
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
 ![deps](https://img.shields.io/badge/dependencies-0-brightgreen)
-![tests](https://img.shields.io/badge/tests-21%20passed-success)
+[![tests](https://github.com/1244p/astrbot_plugin_memory_evo/actions/workflows/tests.yml/badge.svg)](https://github.com/1244p/astrbot_plugin_memory_evo/actions/workflows/tests.yml)
 
 **一句话**：把聊天压成结构化事实存进 SQLite，每轮按相关度取几条注入；把性格拆成五个连续维度，每次演化限速、并且持续向基线回归。
 
