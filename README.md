@@ -1,7 +1,7 @@
 # 记忆与人格演化 · memory_evo
 
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
-> 同时让角色的性格在几十次对话里缓慢漂移，而不是每轮重开存档。
+> 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
 ![version](https://img.shields.io/badge/version-v0.2.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -39,7 +39,7 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 - **注入多样性**：同一槽位最多 2 条、单条最多 80 字，避免一类记忆吃光预算
 - **预算硬约束**：注入前按字符预算截断，默认 600 字符（≈400 token），不会挤爆上下文
 - **不破坏提示词缓存**：动态内容走 `extra_user_content_parts`，`system_prompt` 保持稳定
-- **会话隔离**：群聊、私聊各记各的，A 群不会串到 B 群
+- **按人记忆**：私聊里 `unified_msg_origin` 就是「平台 + 用户」，所以 `/new` 换对话不会失忆；换平台（QQ → WebChat）才算另一个人
 - **人格限速演化**：单次变化 ≤ 6%，每轮向基线回归 1%，永远落在 `[0,1]`
 - **可观测、可撤销**：`/memory dump|why|forget|persona`，每次演化都有理由和版本号
 - **模型可用工具**：`memory_search` / `memory_write` / `memory_forget`，需要时自己查
@@ -213,7 +213,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | 目标 | 配置 |
 |---|---|
 | 日常陪伴（默认） | `top_k=6, flush_turns=6, max_step=0.05, decay=0.01` |
-| 群聊、人多 | `top_k=4, flush_turns=8, max_inject_chars=400` |
+| 高密度私聊（一天几十轮） | `top_k=8, flush_turns=4, max_inject_chars=800` |
 | 想要「半年后判若两人」 | `max_step=0.08, decay=0.002`，`baseline_*` 按角色设定 |
 
 ---
@@ -289,10 +289,10 @@ astrbot_plugin_memory_evo/
 
 - [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
 - [ ] 召回可选接入 embedding（只改 `store.recall`，接口不变）
-- [ ] 群聊按 `sender_id` 再分一层，支持「群里每个人都记得住」
+- [ ] `task` / `event` 带到期时间，配合 cron 主动提一句（私聊场景收益最高）
+- [ ] 跨平台身份归一：`/memory link` 把 QQ / WebChat 的两个 umo 绑成同一个人
 - [ ] 事实超过阈值时做同槽位合并摘要
-- [ ] 从 `task` / `event` 记忆里取到期项，配合 cron 主动提一句
-- [ ] WebUI 管理页（浏览、编辑、回滚人格）
+- [ ] `/memory export` 导出 Markdown，便于备份与迁移
 
 ## FAQ
 
@@ -302,8 +302,14 @@ astrbot_plugin_memory_evo/
 **Q：记忆会不会越存越乱？**
 不会无限增长：同一个 `(主体, 谓词)` 只有一条有效记录，改主意是 supersede 不是堆叠。真要清理，`/memory forget all` 一条命令。
 
-**Q：群聊里会不会把 A 说的话记成 B 的？**
-当前按会话隔离，群内不区分发言人——适合「群作为一个整体」的场景。要分人见 Roadmap 第二项。
+**Q：换平台 / 换号会丢记忆吗？**
+会。记忆的 key 是 `platform:message_type:session_id`，私聊里就是「平台 + 用户 ID」。QQ 和 WebChat 聊同一个人，是两份记忆。要打通得做身份归一（见 Roadmap）。
+
+**Q：`/new` 或 `/reset` 会清记忆吗？**
+不会。`/new` 只换对话（对话历史），不动 `unified_msg_origin`，所以记忆和人格都还在。真想清空用 `/memory forget all`。
+
+**Q：只做私聊，群聊能用吗？**
+能跑，但整个群会被当成一个「人」——群里所有人的偏好会混在一起。这个插件是按私聊陪伴设计的，不建议直接在群里开。
 
 **Q：抽取用主模型会不会很贵？**
 会。所以配置里有 `extract_provider_id`，填一个便宜模型；`flush_turns` 调大也能直接降频。
