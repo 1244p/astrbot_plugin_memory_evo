@@ -1,0 +1,104 @@
+{
+  "enable": {
+    "description": "启用记忆与人格",
+    "type": "bool",
+    "default": true
+  },
+  "db_path": {
+    "description": "数据库路径",
+    "type": "string",
+    "hint": "留空使用 data/plugin_data/astrbot_plugin_memory_evo/memory.db",
+    "default": ""
+  },
+  "top_k": {
+    "description": "每轮注入的记忆条数",
+    "type": "int",
+    "hint": "建议 4-8。条数越多越容易干扰当前话题。",
+    "default": 6
+  },
+  "max_inject_chars": {
+    "description": "记忆注入字符上限",
+    "type": "int",
+    "hint": "600 字符约 400 token。别超过上下文窗口的 10%。",
+    "default": 600
+  },
+  "persona_inject": {
+    "description": "注入人格状态",
+    "type": "bool",
+    "default": true
+  },
+  "persona_max_chars": {
+    "description": "人格状态字符上限",
+    "type": "int",
+    "default": 160
+  },
+  "persona_evolve": {
+    "description": "启用人格演化",
+    "type": "bool",
+    "default": true
+  },
+  "max_step": {
+    "description": "单次演化最大步长",
+    "type": "float",
+    "hint": "0.06 表示每次最多变化 6%。调小更稳，调大更戏剧化。",
+    "default": 0.06
+  },
+  "decay": {
+    "description": "向基线回归系数",
+    "type": "float",
+    "hint": "0.01 表示每轮演化向基线拉回 1%，防止长期漂到极值。",
+    "default": 0.01
+  },
+  "baseline_intimacy": {
+    "description": "基线：亲密度",
+    "type": "float",
+    "default": 0.5
+  },
+  "baseline_playfulness": {
+    "description": "基线：跳脱度",
+    "type": "float",
+    "default": 0.5
+  },
+  "baseline_directness": {
+    "description": "基线：直给度",
+    "type": "float",
+    "default": 0.5
+  },
+  "baseline_initiative": {
+    "description": "基线：主动度",
+    "type": "float",
+    "default": 0.5
+  },
+  "baseline_warmth": {
+    "description": "基线：温度",
+    "type": "float",
+    "default": 0.5
+  },
+  "flush_turns": {
+    "description": "多少轮用户消息触发一次记忆抽取",
+    "type": "int",
+    "hint": "越大越省 token，但记忆越滞后。",
+    "default": 6
+  },
+  "idle_seconds": {
+    "description": "空闲多少秒后补写缓冲",
+    "type": "int",
+    "default": 60
+  },
+  "max_buffer": {
+    "description": "单会话缓冲消息上限",
+    "type": "int",
+    "default": 40
+  },
+  "extract_provider_id": {
+    "description": "抽取用模型提供商 ID",
+    "type": "string",
+    "hint": "留空复用当前会话模型。建议填一个便宜的模型以省钱。",
+    "default": ""
+  },
+  "llm_timeout": {
+    "description": "抽取请求超时（秒）",
+    "type": "int",
+    "default": 45
+  }
+}
