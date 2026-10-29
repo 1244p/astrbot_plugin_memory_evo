@@ -104,7 +104,7 @@ class MemoryEvoPlugin(Star):
         if not scope:
             return json_response({"scope": "", "empty": True})
         data = await asyncio.to_thread(dashboard.overview, self.store.conn, scope)
-        data["care"] = await asyncio.to_thread(dashboard.care_block, self.store.conn, scope)
+        data["care"] = await asyncio.to_thread(self._care_block, scope)
         data["care"]["settings"] = self._care_cfg()
         data["persona"] = await asyncio.to_thread(
             dashboard.persona_block, self.store.conn, scope, self.baseline
@@ -178,13 +178,16 @@ class MemoryEvoPlugin(Star):
             await asyncio.to_thread(
                 self.store.set_care_enabled, scope, bool(payload.get("enabled"))
             )
-            return json_response(await asyncio.to_thread(
-                dashboard.care_block, self.store.conn, scope
-            ))
+            return json_response(await asyncio.to_thread(self._care_block, scope))
         scope = self._query_scope()
-        data = await asyncio.to_thread(dashboard.care_block, self.store.conn, scope)
+        data = await asyncio.to_thread(self._care_block, scope)
         data["settings"] = self._care_cfg()
         return json_response(data)
+
+    def _care_block(self, scope: str) -> dict:
+        return dashboard.care_block(
+            self.store.conn, scope, float(self._get("care_min_idle_minutes", 90))
+        )
 
     async def api_export(self):
         from astrbot.api.web import file_response, json_response

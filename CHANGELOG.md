@@ -11,6 +11,25 @@
 - 跨平台身份归一 `/memory link`
 - 同槽位合并摘要
 
+## [v0.5.1] - 2026-10-29
+
+### Fixed
+
+- 面板「下次最早」一直显示 `—`：原先只回显库里存的 `next_gap_minutes`，而这一列只有在**主动发过**或
+  **巡检被跳过**时才写入，新装/刚清库的会话永远是 0
+- 现在由后端算出实际时刻：`next_at = max(last_sent + next_gap, last_active + care_min_idle_minutes)`，
+  并带上 `next_reason`（`never_sent` / `gap` / `idle`）与 `ready`（闸门是否已过），面板显示成 `HH:MM（N 分钟后）`
+  或「现在就可以」
+
+### Changed
+
+- `dashboard.care_block()` 增加 `min_idle_minutes` 参数，返回 `idle_until` / `gap_until` / `next_at` / `next_reason` / `ready`
+- 主动消息页签多一行「判定依据」，说明当前卡在哪道闸门
+
+### Tests
+
+- 100 → 105：从未发过、等间隔、等空闲、空闲已够、两道闸门取更晚者
+
 ## [v0.5.0] - 2026-10-29
 
 ### Added

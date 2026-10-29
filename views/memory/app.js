@@ -163,6 +163,27 @@ function renderPersona() {
     .join("") || `<li class="hint">还没有演化记录，人格仍是初始值。</li>`;
 }
 
+function clock(ts) {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+const REASON_TEXT = {
+  never_sent: "还没主动发过，只看空闲",
+  gap: "上次主动设定的间隔还没到",
+  idle: "等你安静够久",
+};
+
+function nextText(c) {
+  const at = c.next_at || 0;
+  if (!at) return "现在就可以";
+  if (c.ready) return "现在就可以";
+  const mins = Math.max(1, Math.ceil((at - Date.now() / 1000) / 60));
+  const label = clock(at);
+  const today = new Date(at * 1000).toDateString() === new Date().toDateString();
+  return `${today ? "" : "明天 "}${label}（${mins} 分钟后）`;
+}
+
 function renderCare() {
   const c = state.care || {};
   const s = (c.settings || {});
@@ -170,8 +191,9 @@ function renderCare() {
     ["本会话", c.enabled ? "开" : "关"],
     ["今日已发", `${c.sent_today ?? 0} / ${s.daily_max ?? "—"}`],
     ["连续未回应", `${c.unanswered ?? 0} / ${s.max_unanswered ?? "—"}`],
-    ["下次最早", c.next_gap_minutes ? `${c.next_gap_minutes} 分钟后` : "—"],
-    ["空闲要求", `${s.min_idle_minutes ?? "—"} 分钟`],
+    ["下次最早", nextText(c)],
+    ["判定依据", REASON_TEXT[c.next_reason] || "空闲 + 间隔都满足"],
+    ["空闲要求", `${s.min_idle_minutes ?? c.min_idle_minutes ?? "—"} 分钟`],
     ["免打扰", s.quiet_start ? `${s.quiet_start} - ${s.quiet_end}` : "—"],
     ["允许时段", s.schedule || "不限"],
     ["总开关", s.enabled ? "开" : "关"],
@@ -181,6 +203,11 @@ function renderCare() {
     .join("");
   const last = c.last_text ? `<div class="care-last">上次主动说：${esc(c.last_text)}</div>` : "";
   $("care-grid").insertAdjacentHTML("beforeend", last);
+  $("care-grid").insertAdjacentHTML(
+    "beforeend",
+    `<div class="care-last">下次最早 = max(距上次主动的间隔, 距用户最后一句的空闲要求)；
+     免打扰与允许时段另算——即使时间到了，也不一定就在窗口里。</div>`,
+  );
   $("care-toggle").textContent = c.enabled ? "关闭这个会话的主动消息" : "开启这个会话的主动消息";
 }
 

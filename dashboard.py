@@ -249,24 +249,49 @@ def persona_block(conn: sqlite3.Connection, scope: str, baseline: dict[str, floa
     }
 
 
-def care_block(conn: sqlite3.Connection, scope: str) -> dict:
+def care_block(
+    conn: sqlite3.Connection, scope: str, min_idle_minutes: float = 90.0
+) -> dict:
+    """主动消息状态。next_at = 两道闸门里更晚的那个时刻（epoch 秒）。"""
     row = conn.execute("SELECT * FROM proactive WHERE scope = ?", (scope,)).fetchone()
     if row is None:
-        return {
-            "scope": scope, "enabled": 1, "last_active": 0, "last_sent": 0,
-            "sent_today": 0, "unanswered": 0, "next_gap_minutes": 0, "last_text": "",
+        base = {
+            "scope": scope, "enabled": 1, "last_active": 0.0, "last_sent": 0.0,
+            "sent_date": "", "sent_today": 0, "unanswered": 0,
+            "next_gap_minutes": 0, "last_text": "",
         }
-    return {
-        "scope": scope,
-        "enabled": int(row["enabled"]),
-        "last_active": float(row["last_active"]),
-        "last_sent": float(row["last_sent"]),
-        "sent_date": row["sent_date"],
-        "sent_today": int(row["sent_today"]),
-        "unanswered": int(row["unanswered"]),
-        "next_gap_minutes": int(row["next_gap"]),
-        "last_text": row["last_text"],
-    }
+    else:
+        base = {
+            "scope": scope,
+            "enabled": int(row["enabled"]),
+            "last_active": float(row["last_active"]),
+            "last_sent": float(row["last_sent"]),
+            "sent_date": row["sent_date"],
+            "sent_today": int(row["sent_today"]),
+            "unanswered": int(row["unanswered"]),
+            "next_gap_minutes": int(row["next_gap"]),
+            "last_text": row["last_text"],
+        }
+
+    now = time.time()
+    idle_at = base["last_active"] + min_idle_minutes * 60 if base["last_active"] else 0.0
+    gap_at = base["last_sent"] + base["next_gap_minutes"] * 60 if base["last_sent"] else 0.0
+    gates = [(t, why) for t, why in ((idle_at, "idle"), (gap_at, "gap")) if t]
+    if gates:
+        next_at, reason = max(gates)
+    else:
+        next_at, reason = 0.0, "never_sent"
+    base.update(
+        {
+            "idle_until": idle_at,
+            "gap_until": gap_at,
+            "next_at": next_at,
+            "next_reason": reason,
+            "ready": not next_at or next_at <= now,
+            "min_idle_minutes": float(min_idle_minutes),
+        }
+    )
+    return base
 
 
 def export_payload(conn: sqlite3.Connection, scope: str) -> dict:

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -168,6 +169,47 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(data["sent_today"], 1)
         self.assertEqual(data["last_text"], "今天降温了，记得加衣服")
         self.assertEqual(data["next_gap_minutes"], 45)
+
+    def test_care_next_at_never_sent(self):
+        data = dashboard.care_block(self.conn, A, min_idle_minutes=90)
+        self.assertEqual(data["next_at"], 0)
+        self.assertEqual(data["next_reason"], "never_sent")
+        self.assertTrue(data["ready"])
+
+    def test_care_next_at_waiting_for_gap(self):
+        now = time.time()
+        self.store.mark_care_sent(A, now, "2026-10-29", "在忙吗", 45)
+        data = dashboard.care_block(self.conn, A, min_idle_minutes=90)
+        self.assertFalse(data["ready"])
+        self.assertEqual(data["next_reason"], "gap")
+        self.assertAlmostEqual(data["next_at"], now + 45 * 60, delta=2)
+        self.assertGreater(data["next_at"], now)
+
+    def test_care_next_at_waiting_for_idle(self):
+        self.store.touch_activity(A)
+        data = dashboard.care_block(self.conn, A, min_idle_minutes=60)
+        self.assertFalse(data["ready"])
+        self.assertEqual(data["next_reason"], "idle")
+        self.assertGreater(data["next_at"], time.time())
+
+    def test_care_ready_when_idle_long_enough(self):
+        self.store.touch_activity(A)
+        self.conn.execute(
+            "UPDATE proactive SET last_active = ? WHERE scope = ?",
+            (time.time() - 3 * 3600, A),
+        )
+        self.conn.commit()
+        data = dashboard.care_block(self.conn, A, min_idle_minutes=60)
+        self.assertTrue(data["ready"])
+
+    def test_care_next_at_takes_later_gate(self):
+        now = time.time()
+        self.store.touch_activity(A)
+        self.store.mark_care_sent(A, now, "2026-10-29", "在忙吗", 240)
+        data = dashboard.care_block(self.conn, A, min_idle_minutes=5)
+        # 间隔 240 分钟比空闲 5 分钟更晚，取更晚的那个
+        self.assertEqual(data["next_reason"], "gap")
+        self.assertAlmostEqual(data["next_at"], now + 240 * 60, delta=2)
 
     def test_export_payload_json_safe(self):
         self.store.save_persona(A, dict(DEFAULTS), "calm", reason="基线")
