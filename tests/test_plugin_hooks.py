@@ -50,6 +50,28 @@ def _install_stubs(tmpdir: str) -> None:
     event_mod.filter = _Filter()
     event_mod.AstrMessageEvent = object
 
+    class MessageChain(list):
+        def __init__(self, chain=None):
+            super().__init__(chain or [])
+
+    event_mod.MessageChain = MessageChain
+
+    comp_mod = module("astrbot.api.message_components")
+
+    @dataclass
+    class Plain:
+        text: str
+
+    comp_mod.Plain = Plain
+
+    platform_mod = module("astrbot.api.platform")
+
+    class MessageType:
+        FRIEND_MESSAGE = type("MT", (), {"value": "FriendMessage"})()
+        GROUP_MESSAGE = type("MT", (), {"value": "GroupMessage"})()
+
+    platform_mod.MessageType = MessageType
+
     provider_mod = module("astrbot.api.provider")
 
     @dataclass
@@ -72,6 +94,7 @@ def _install_stubs(tmpdir: str) -> None:
         def __init__(self):
             self.provider = None
             self.embedding_providers = []
+            self.sent = []
 
         def get_provider_by_id(self, _id):
             return None
@@ -84,6 +107,10 @@ def _install_stubs(tmpdir: str) -> None:
 
         async def get_using_provider_async(self, _umo=None):
             return self.provider
+
+        async def send_message(self, session, chain):
+            self.sent.append((session, [getattr(c, "text", None) for c in chain]))
+            return True
 
     class Star:
         def __init__(self, context, config=None):
@@ -252,6 +279,41 @@ class HookTest(unittest.TestCase):
         self.plugin._emb_resolved = False
         self.assertIs(self.plugin._embedder(), emb)
         self.assertIn("embedding:nope", self.plugin._warned)
+
+    def test_care_sends_when_forced(self):
+        self.plugin.cfg["care_enable"] = True
+        self.plugin.cfg["care_quiet_start"] = "00:00"
+        self.plugin.cfg["care_quiet_end"] = "00:00"  # 关闭免打扰窗口
+        self.plugin.context.provider = FakeProvider(
+            '{"send": true, "message": "在改那个 bug 吗", "next_gap_minutes": 60}'
+        )
+        sent_ok, reason = asyncio.run(
+            self.plugin._maybe_care("aiocqhttp:FriendMessage:1", force=True)
+        )
+        self.assertTrue(sent_ok, reason)
+        self.assertEqual(len(self.plugin.context.sent), 1)
+        self.assertIn("bug", self.plugin.context.sent[0][1][0])
+
+    def test_care_ignores_group_scope(self):
+        self.plugin.cfg["care_enable"] = True
+        ok, reason = asyncio.run(
+            self.plugin._maybe_care("aiocqhttp:GroupMessage:999", force=True)
+        )
+        self.assertEqual((ok, reason), (False, "not_private"))
+
+    def test_care_respects_model_silence(self):
+        self.plugin.cfg["care_enable"] = True
+        self.plugin.cfg["care_quiet_start"] = "00:00"
+        self.plugin.cfg["care_quiet_end"] = "00:00"
+        self.plugin.context.provider = FakeProvider(
+            '{"send": false, "reason": "刚聊过", "next_gap_minutes": 45}'
+        )
+        ok, reason = asyncio.run(
+            self.plugin._maybe_care("aiocqhttp:FriendMessage:1", force=True)
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "刚聊过")
+        self.assertEqual(self.plugin.context.sent, [])
 
     def test_write_then_forget(self):
         asyncio.run(self.plugin.tool_write(FakeEvent(), "用户对花生过敏", "profile", 5))

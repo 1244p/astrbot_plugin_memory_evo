@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS persona (
     updated_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proactive (
+    scope        TEXT PRIMARY KEY,
+    last_active  REAL    NOT NULL DEFAULT 0,
+    last_sent    REAL    NOT NULL DEFAULT 0,
+    sent_date    TEXT    NOT NULL DEFAULT '',
+    sent_today   INTEGER NOT NULL DEFAULT 0,
+    unanswered   INTEGER NOT NULL DEFAULT 0,
+    next_gap     INTEGER NOT NULL DEFAULT 0,
+    last_text    TEXT    NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS persona_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     scope      TEXT NOT NULL,
@@ -520,6 +532,84 @@ class MemoryStore:
             "SELECT * FROM persona_log WHERE scope=? ORDER BY id DESC LIMIT ?",
             (scope, limit),
         ).fetchall()
+
+    # ---------------- 主动开口 ----------------
+
+    def touch_activity(self, scope: str, ts: float | None = None) -> None:
+        """记录用户说话：刷新活跃时间并清零未回应计数。"""
+        now = float(ts or time.time())
+        self.conn.execute(
+            "INSERT INTO proactive(scope,last_active,unanswered) VALUES(?,?,0)"
+            " ON CONFLICT(scope) DO UPDATE SET last_active=excluded.last_active,"
+            " unanswered=0",
+            (scope, now),
+        )
+        self.conn.commit()
+
+    def get_care_state(self, scope: str) -> dict:
+        row = self.conn.execute(
+            "SELECT * FROM proactive WHERE scope=?", (scope,)
+        ).fetchone()
+        if not row:
+            return {
+                "last_active": 0.0,
+                "last_sent": 0.0,
+                "sent_date": "",
+                "sent_today": 0,
+                "unanswered": 0,
+                "next_gap_minutes": 0,
+                "last_text": "",
+                "enabled": 1,
+            }
+        return {
+            "last_active": float(row["last_active"]),
+            "last_sent": float(row["last_sent"]),
+            "sent_date": row["sent_date"],
+            "sent_today": int(row["sent_today"]),
+            "unanswered": int(row["unanswered"]),
+            "next_gap_minutes": int(row["next_gap"]),
+            "last_text": row["last_text"],
+            "enabled": int(row["enabled"]),
+        }
+
+    def mark_care_sent(
+        self,
+        scope: str,
+        ts: float,
+        date_str: str,
+        text: str,
+        next_gap: int,
+    ) -> None:
+        state = self.get_care_state(scope)
+        # 距上次主动之后用户没再说话 → 未回应计数 +1
+        unanswered = state["unanswered"] + 1 if state["last_sent"] > state["last_active"] else 1
+        sent_today = state["sent_today"] + 1 if state["sent_date"] == date_str else 1
+        self.conn.execute(
+            "INSERT INTO proactive(scope,last_sent,sent_date,sent_today,unanswered,next_gap,last_text)"
+            " VALUES(?,?,?,?,?,?,?)"
+            " ON CONFLICT(scope) DO UPDATE SET last_sent=excluded.last_sent,"
+            " sent_date=excluded.sent_date, sent_today=excluded.sent_today,"
+            " unanswered=excluded.unanswered, next_gap=excluded.next_gap,"
+            " last_text=excluded.last_text",
+            (scope, ts, date_str, sent_today, unanswered, int(next_gap), text[:200]),
+        )
+        self.conn.commit()
+
+    def set_care_enabled(self, scope: str, enabled: bool) -> None:
+        self.conn.execute(
+            "INSERT INTO proactive(scope,enabled) VALUES(?,?)"
+            " ON CONFLICT(scope) DO UPDATE SET enabled=excluded.enabled",
+            (scope, 1 if enabled else 0),
+        )
+        self.conn.commit()
+
+    def mark_care_skipped(self, scope: str, next_gap: int) -> None:
+        self.conn.execute(
+            "INSERT INTO proactive(scope,next_gap) VALUES(?,?)"
+            " ON CONFLICT(scope) DO UPDATE SET next_gap=excluded.next_gap",
+            (scope, int(next_gap)),
+        )
+        self.conn.commit()
 
     def close(self) -> None:
         try:

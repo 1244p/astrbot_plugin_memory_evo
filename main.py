@@ -8,13 +8,15 @@ import time
 from collections import deque
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Plain
+from astrbot.api.platform import MessageType
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.core.agent.message import TextPart
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
-from . import extractor, persona
+from . import extractor, persona, proactive
 from .store import MemoryStore
 
 PLUGIN_NAME = "astrbot_plugin_memory_evo"
@@ -24,6 +26,7 @@ HELP_TEXT = (
     "/memory why <词> 看召回打分\n"
     "/memory confirm <id> 确认一条待确认记忆\n"
     "/memory reindex 补写缺失语义向量\n"
+    "/memory care 主动消息 on|off|status|now\n"
     "/memory forget <id|词|all> 删除\n"
     "/memory persona 查看人格状态与演化记录"
 )
@@ -44,6 +47,7 @@ class MemoryEvoPlugin(Star):
         self.inflight: set[str] = set()
         self._scopes: set[str] = set()
         self._warned: set[str] = set()
+        self._ticks = 0
         self._emb_resolved = False
         self._emb_provider = None
         self._emb_model = ""
@@ -86,13 +90,17 @@ class MemoryEvoPlugin(Star):
                         await self._backfill_embeddings(scope, limit=16)
                     except Exception:
                         logger.debug("[memory_evo] 向量补写失败 scope=%s", scope, exc_info=True)
+                self._ticks += 1
+                if self._ticks % 3 == 0:
+                    await self._care_tick()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("[memory_evo] janitor 异常退出")
 
-    async def _provider(self, umo: str):
-        provider_id = str(self._get("extract_provider_id", "") or "")
+    async def _provider(self, umo: str, provider_id: str | None = None):
+        if provider_id is None:
+            provider_id = str(self._get("extract_provider_id", "") or "")
         if provider_id:
             provider = self.context.get_provider_by_id(provider_id)
             if provider:
@@ -209,8 +217,10 @@ class MemoryEvoPlugin(Star):
         await self._embed_new(scope, missing)
         return len(missing)
 
-    async def _ask(self, umo: str, system: str, prompt: str) -> dict:
-        provider = await self._provider(umo)
+    async def _ask(
+        self, umo: str, system: str, prompt: str, provider_id: str | None = None
+    ) -> dict:
+        provider = await self._provider(umo, provider_id)
         if not provider:
             logger.debug("[memory_evo] 没有可用 provider，跳过本次抽取")
             return {}
@@ -231,6 +241,11 @@ class MemoryEvoPlugin(Star):
         scope = event.unified_msg_origin
         text = event.message_str or ""
         self._scopes.add(scope)
+        if text:
+            try:
+                await asyncio.to_thread(self.store.touch_activity, scope)
+            except Exception:
+                logger.debug("[memory_evo] 记录活跃时间失败", exc_info=True)
         blocks: list[str] = []
 
         query_vec = None
@@ -365,6 +380,82 @@ class MemoryEvoPlugin(Star):
         finally:
             self.inflight.discard(scope)
 
+    # ---------------- 主动开口 ----------------
+
+    def _care_cfg(self) -> dict:
+        return {
+            "enabled": bool(self._get("care_enable", False)),
+            "min_idle_minutes": float(self._get("care_min_idle_minutes", 90)),
+            "daily_max": int(self._get("care_daily_max", 3)),
+            "max_unanswered": int(self._get("care_max_unanswered", 2)),
+            "quiet_start": str(self._get("care_quiet_start", "23:30")),
+            "quiet_end": str(self._get("care_quiet_end", "08:00")),
+            "probability": float(self._get("care_probability", 0.85)),
+        }
+
+    @staticmethod
+    def _is_friend_scope(scope: str) -> bool:
+        parts = scope.split(":")
+        return len(parts) >= 2 and parts[1] == MessageType.FRIEND_MESSAGE.value
+
+    async def _care_tick(self) -> None:
+        if not self._get("care_enable", False):
+            return
+        for scope in list(self._scopes):
+            if not self._is_friend_scope(scope):
+                continue
+            try:
+                await self._maybe_care(scope)
+            except Exception:
+                logger.exception(f"[memory_evo] 主动消息检查失败 scope={scope}")
+
+    async def _maybe_care(self, scope: str, force: bool = False) -> tuple[bool, str]:
+        """检查并（可能）主动发一条。返回 (是否已发送, 原因)。"""
+        if not self._is_friend_scope(scope):
+            return False, "not_private"
+        state = await asyncio.to_thread(self.store.get_care_state, scope)
+        tz_name = str(self._get("care_timezone", proactive.DEFAULT_TZ))
+        now = proactive.local_now(tz_name)
+        ok, reason = proactive.decide(now, state, self._care_cfg(), force=force)
+        if not ok:
+            logger.debug(f"[memory_evo] 主动消息跳过：{reason} scope={scope}")
+            return False, reason
+
+        facts = await asyncio.to_thread(
+            self.store.recall, scope, "", 4, 400, 0.45, False, 2, 60
+        )
+        p_state = await asyncio.to_thread(self.store.get_persona, scope, self.baseline)
+        persona_text = persona.render(p_state["traits"], p_state.get("mood", ""), 80)
+        memory_lines = [f"{f.predicate}：{f.object}" for f in facts]
+        max_chars = int(self._get("care_max_chars", 45))
+        prompt = proactive.render_prompt(now, state, persona_text, memory_lines, max_chars)
+        data = await self._ask(
+            scope,
+            proactive.CARE_SYSTEM,
+            prompt,
+            provider_id=str(self._get("care_provider_id", "") or ""),
+        )
+        text, gap, why = proactive.sanitize_reply(data, max_chars)
+        if not text:
+            await asyncio.to_thread(self.store.mark_care_skipped, scope, gap)
+            logger.debug(f"[memory_evo] 主动消息选择沉默：{why} gap={gap}")
+            return False, why
+
+        sent = await self.context.send_message(scope, MessageChain([Plain(text)]))
+        if not sent:
+            logger.warning(f"[memory_evo] 主动消息发送失败（找不到平台） scope={scope}")
+            return False, "send_failed"
+        await asyncio.to_thread(
+            self.store.mark_care_sent,
+            scope,
+            now.timestamp(),
+            now.strftime("%Y-%m-%d"),
+            text,
+            gap,
+        )
+        logger.info(f"[memory_evo] 已主动发送 scope={scope} gap={gap}min text={text[:30]!r}")
+        return True, "sent"
+
     # ---------------- 模型可用工具 ----------------
 
     @filter.llm_tool(name="memory_search")
@@ -487,6 +578,38 @@ class MemoryEvoPlugin(Star):
             else:
                 count = await asyncio.to_thread(self.store.forget_matching, scope, arg)
             yield event.plain_result(f"已删除 {count} 条。")
+            return
+
+        if sub == "care":
+            arg = parts[2].lower() if len(parts) > 2 else "status"
+            if arg in ("on", "off"):
+                if not self._get("care_enable", False):
+                    yield event.plain_result(
+                        "主动消息总开关（care_enable）还没开，先去插件设置里打开，再单独开关这个会话。"
+                    )
+                    return
+                await asyncio.to_thread(self.store.set_care_enabled, scope, arg == "on")
+                yield event.plain_result(
+                    "这个会话的主动消息已开启。" if arg == "on" else "已关闭这个会话的主动消息。"
+                )
+                return
+            if arg == "now":
+                sent, reason = await self._maybe_care(scope, force=True)
+                yield event.plain_result("已发出一条。" if sent else f"没发：{reason}")
+                return
+            state = await asyncio.to_thread(self.store.get_care_state, scope)
+            cfg = self._care_cfg()
+            idle = (time.time() - float(state["last_active"])) / 60 if state["last_active"] else -1
+            body = [
+                f"总开关：{'开' if cfg['enabled'] else '关'}",
+                f"本会话：{'开' if state.get('enabled', 1) else '关'}",
+                (f"空闲：{idle:.0f} 分钟" if idle >= 0 else "还没记录到活跃时间"),
+                f"今日已发：{state['sent_today']} / {cfg['daily_max']}",
+                f"未回应：{state['unanswered']} / {cfg['max_unanswered']}",
+                f"下次最早：{state['next_gap_minutes']} 分钟后",
+                f"免打扰：{cfg['quiet_start']} - {cfg['quiet_end']}",
+            ]
+            yield event.plain_result(chr(10).join(body))
             return
 
         if sub == "reindex":

@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.3.1-blue)
+![version](https://img.shields.io/badge/version-v0.4.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -44,6 +44,7 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 - **人格限速演化**：单次变化 ≤ 6%，每轮向基线回归 1%，永远落在 `[0,1]`
 - **可观测、可撤销**：`/memory dump|why|forget|persona`，每次演化都有理由和版本号
 - **模型可用工具**：`memory_search` / `memory_write` / `memory_forget`，需要时自己查
+- **主动开口**：用户安静够久时，它会结合「记得的事 + 当前心情」自己发一条，而不是定时刷屏
 - **离线可跑测试**：21 个用例不需要安装 AstrBot 也能执行
 
 ---
@@ -214,6 +215,15 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `max_step` | `0.06` | 单次演化最大步长 |
 | `decay` | `0.01` | 向基线回归速度 |
 | `baseline_*` | `0.5` | 出厂性格（五维各一项） |
+| `care_enable` | `false` | 主动消息总开关（仅私聊） |
+| `care_min_idle_minutes` | `90` | 至少空闲多少分钟才考虑开口 |
+| `care_daily_max` | `3` | 每日主动上限 |
+| `care_max_unanswered` | `2` | 连续未回应几次后停止 |
+| `care_quiet_start` / `care_quiet_end` | `23:30` / `08:00` | 免打扰窗口，支持跨零点 |
+| `care_probability` | `0.85` | 满足条件后仍按概率决定 |
+| `care_max_chars` | `45` | 主动消息长度上限 |
+| `care_timezone` | `Asia/Shanghai` | 免打扰与时间判断用的时区 |
+| `care_provider_id` | 空 | 生成用 provider，留空复用抽取模型 |
 | `flush_turns` | `6` | 多少轮用户消息触发一次抽取 |
 | `idle_seconds` | `60` | 空闲多久补写缓冲 |
 | `max_buffer` | `40` | 单会话缓冲上限 |
@@ -230,6 +240,46 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 
 ---
 
+## 主动开口（v0.4）
+
+不是定时任务，是**空闲触发 + 多重闸门**：
+
+```mermaid
+flowchart LR
+    T["每 60s 巡检"] --> A{"总开关 / 会话静音"}
+    A -->|过| B{"免打扰时段"}
+    B -->|过| C{"空闲 ≥ 90 分钟"}
+    C -->|过| D{"今日未超 3 条"}
+    D -->|过| E{"未回应 < 2 次"}
+    E -->|过| F["模型决定 发/不发 + 下次间隔"]
+    F -->|发| G["context.send_message 私聊会话"]
+    F -->|不发| H["记录间隔，继续等"]
+```
+
+| 规则 | 默认 | 说明 |
+|---|---|---|
+| 总开关 | 关 | `care_enable`，只对私聊生效 |
+| 最少空闲 | 90 分钟 | 用户刚说完话时绝不会插进来 |
+| 免打扰 | 23:30–08:00 | 支持跨零点窗口 |
+| 每日上限 | 3 条 | 防止变成骚扰 |
+| 连续未回应 | 2 次后停 | 你不理它，它就闭嘴，等你先开口 |
+| 触发概率 | 0.85 | 满足条件也可能不发，避免过于规律 |
+| 生成长度 | ≤45 字 | 短一点才像真人 |
+
+**两处关键设计**：
+
+1. **模型自己决定下一次何时来**。生成时同时返回 `next_gap_minutes`（15–240），下次巡检至少等这么久，不像固定心跳那样可预测。
+2. **内容是长出来的，不是模板**。提示词里带三样东西：人格当前状态、记忆里最相关的 3–4 条事实、上次主动说过的话（防重复）。所以它可能说「在改那个 bug 吗，别熬太晚」，而不是「今天过得怎么样」。
+
+```
+/memory care status   # 当前状态、今日已发、未回应计数
+/memory care off      # 只静音这个会话
+/memory care on       # 恢复
+/memory care now      # 立刻试发一条（跳过空闲/冷却/上限，仍守免打扰）
+```
+
+> 对比市场同类（`proactive_chat` 87k 下载、`proactive_care` 的链式唤醒、`private_companion` 的编排），这里的取舍是：**不另建一套状态，直接吃记忆和人格**。好处是零重复配置、说法有据可依；代价是没有独立面板，只能靠命令看。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -239,6 +289,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `/memory why <词>` | 查看召回打分，调 `top_k` 时必备 |
 | `/memory confirm <id>` | 确认一条待确认记忆，冲突的另一条自动归档 |
 | `/memory reindex` | 手动补写缺失的语义向量 |
+| `/memory care [on/off/status/now]` | 主动开口的开关、状态与立即试发 |
 | `/memory forget <id\|词\|all>` | 删除记忆 |
 | `/memory persona` | 五维当前值 + 最近 5 次演化及理由 |
 
@@ -278,7 +329,7 @@ python -m unittest discover -s tests -v
 ```
 
 ```
-Ran 40 tests — OK
+Ran 64 tests — OK
 ```
 
 覆盖：重复事实合并、改值 supersede、会话隔离、召回排序与预算、遗忘、人格步长/边界/回归、
@@ -303,7 +354,8 @@ astrbot_plugin_memory_evo/
 
 - [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
 - [x] 语义召回：embedding + 余弦，失败自动回退（v0.3.0）
-- [ ] `task` / `event` 带到期时间，配合 cron 主动提一句（私聊场景收益最高）
+- [x] 主动开口：空闲触发 + 免打扰 + 每日上限 + 模型决定下次间隔（v0.4.0）
+- [ ] `task` / `event` 带到期时间，到期主动提一句
 - [ ] 跨平台身份归一：`/memory link` 把 QQ / WebChat 的两个 umo 绑成同一个人
 - [ ] 事实超过阈值时做同槽位合并摘要
 - [ ] `/memory export` 导出 Markdown，便于备份与迁移
@@ -318,6 +370,9 @@ astrbot_plugin_memory_evo/
 
 **Q：记忆会不会越存越乱？**
 不会无限增长：同一个 `(主体, 谓词)` 只有一条有效记录，改主意是 supersede 不是堆叠。真要清理，`/memory forget all` 一条命令。
+
+**Q：主动消息会不会刷屏？**
+默认关着；开了也有四道闸：最少空闲 90 分钟、每日 ≤3 条、连续 2 次没回应就停、23:30–08:00 不打扰。想更保守就把 `care_daily_max` 设成 1、`care_min_idle_minutes` 设成 180。
 
 **Q：换平台 / 换号会丢记忆吗？**
 会。记忆的 key 是 `platform:message_type:session_id`，私聊里就是「平台 + 用户 ID」。QQ 和 WebChat 聊同一个人，是两份记忆。要打通得做身份归一（见 Roadmap）。

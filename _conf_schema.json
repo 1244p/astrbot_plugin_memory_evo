@@ -115,6 +115,66 @@
     "hint": "超出截断，避免一条长记忆吃掉整个预算。",
     "default": 80
   },
+  "care_enable": {
+    "description": "主动消息",
+    "type": "bool",
+    "hint": "关闭时下面所有项都不生效。只对私聊会话生效。",
+    "default": false
+  },
+  "care_min_idle_minutes": {
+    "description": "最少空闲分钟数",
+    "type": "int",
+    "hint": "用户安静多久之后才考虑主动开口。",
+    "default": 90
+  },
+  "care_daily_max": {
+    "description": "每日主动上限",
+    "type": "int",
+    "hint": "一天最多主动发几条，防止变成打扰。",
+    "default": 3
+  },
+  "care_max_unanswered": {
+    "description": "连续未回应上限",
+    "type": "int",
+    "hint": "连续几次主动都没被回复就停下来，等用户先说话。",
+    "default": 2
+  },
+  "care_quiet_start": {
+    "description": "免打扰开始",
+    "type": "string",
+    "hint": "HH:MM，支持跨零点，例如 23:30。",
+    "default": "23:30"
+  },
+  "care_quiet_end": {
+    "description": "免打扰结束",
+    "type": "string",
+    "hint": "HH:MM，例如 08:00。",
+    "default": "08:00"
+  },
+  "care_probability": {
+    "description": "触发概率",
+    "type": "float",
+    "hint": "满足条件后仍有这个概率才真的发，避免过于规律。",
+    "default": 0.85
+  },
+  "care_max_chars": {
+    "description": "消息长度上限",
+    "type": "int",
+    "hint": "主动消息的字符数，短一点更像真人。",
+    "default": 45
+  },
+  "care_timezone": {
+    "description": "时区",
+    "type": "string",
+    "hint": "用于免打扰判断与提示词里的当前时间。",
+    "default": "Asia/Shanghai"
+  },
+  "care_provider_id": {
+    "description": "生成用 Provider ID",
+    "type": "string",
+    "hint": "留空复用抽取模型（extract_provider_id）或当前会话模型。",
+    "default": ""
+  },
   "flush_turns": {
     "description": "多少轮用户消息触发一次记忆抽取",
     "type": "int",
