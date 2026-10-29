@@ -9,6 +9,7 @@ const state = {
   filters: { q: "", kind: "", status: "" },
   care: null,
   persona: null,
+  settings: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -211,6 +212,111 @@ function renderCare() {
   $("care-toggle").textContent = c.enabled ? "关闭这个会话的主动消息" : "开启这个会话的主动消息";
 }
 
+function fieldInput(f) {
+  const id = `set-${f.key}`;
+  const common = `id="${id}" data-key="${esc(f.key)}"`;
+  if (f.type === "bool") {
+    return `<input type="checkbox" ${common} ${f.value ? "checked" : ""} />`;
+  }
+  if (f.type === "int" || f.type === "float") {
+    const step = f.type === "int" ? "1" : "0.01";
+    const min = f.min !== undefined ? `min="${f.min}"` : "";
+    const max = f.max !== undefined ? `max="${f.max}"` : "";
+    return `<input type="number" ${common} step="${step}" ${min} ${max} value="${esc(f.value ?? "")}" />`;
+  }
+  return `<input type="text" ${common} value="${esc(f.value ?? "")}" />`;
+}
+
+function renderSettings() {
+  const data = state.settings;
+  if (!data) {
+    $("settings-groups").innerHTML = `<p class="empty">设置加载失败，刷新试试。</p>`;
+    return;
+  }
+  $("settings-groups").innerHTML = (data.groups || [])
+    .filter((g) => (g.fields || []).length)
+    .map((g) => `
+      <section class="set-group">
+        <h2 class="sub">${esc(g.title)}</h2>
+        <div class="set-fields">
+          ${g.fields.map((f) => `
+            <div class="set-field" data-field="${esc(f.key)}">
+              <label for="set-${esc(f.key)}">
+                ${esc(f.label)}
+                ${f.restart ? `<span class="badge">需重启</span>` : ""}
+              </label>
+              ${fieldInput(f)}
+              ${f.hint ? `<p class="hint">${esc(f.hint)}</p>` : ""}
+              <p class="field-error" data-error="${esc(f.key)}" hidden></p>
+            </div>`).join("")}
+        </div>
+      </section>`)
+    .join("");
+}
+
+function readSettingsForm() {
+  const values = {};
+  document.querySelectorAll("#settings-groups [data-key]").forEach((el) => {
+    const key = el.dataset.key;
+    values[key] = el.type === "checkbox" ? el.checked : el.value;
+  });
+  return values;
+}
+
+function clearFieldErrors() {
+  document.querySelectorAll("[data-error]").forEach((el) => {
+    el.hidden = true;
+    el.textContent = "";
+  });
+}
+
+async function saveSettings() {
+  clearFieldErrors();
+  $("settings-save").disabled = true;
+  try {
+    const r = await bridge.apiPost("settings", { values: readSettingsForm() });
+    if (r && r.ok === false) {
+      const errors = r.errors || {};
+      Object.entries(errors).forEach(([key, msg]) => {
+        const el = document.querySelector(`[data-error="${key}"]`);
+        if (el) {
+          el.textContent = msg;
+          el.hidden = false;
+        }
+      });
+      toast(`有 ${Object.keys(errors).length} 项没通过校验`, true);
+      return;
+    }
+    state.settings = r;
+    renderSettings();
+    const changed = r.changed || [];
+    if (!changed.length) {
+      toast("没有改动");
+    } else if ((r.restart_required || []).length) {
+      toast(`已保存；${r.restart_required.join("、")} 需重启生效`);
+    } else {
+      toast(`已保存：${changed.length} 项`);
+    }
+  } catch (e) {
+    toast(e.message || "保存失败", true);
+  } finally {
+    $("settings-save").disabled = false;
+  }
+}
+
+async function loadSettings(force = false) {
+  if (state.settings && !force) {
+    renderSettings();
+    return;
+  }
+  try {
+    state.settings = await bridge.apiGet("settings");
+    renderSettings();
+  } catch (e) {
+    toast(e.message || "设置加载失败", true);
+  }
+}
+
 async function reload() {
   if (!state.scope) return;
   try {
@@ -278,6 +384,17 @@ function bind() {
       .download("export", { scope: state.scope }, `memory-${state.scope.replace(/:/g, "_")}.json`)
       .catch((e) => toast(e.message, true));
   });
+  $("settings-save").addEventListener("click", saveSettings);
+  $("settings-defaults").addEventListener("click", () => {
+    const groups = (state.settings && state.settings.groups) || [];
+    groups.forEach((g) => (g.fields || []).forEach((f) => {
+      const el = document.getElementById(`set-${f.key}`);
+      if (!el) return;
+      if (el.type === "checkbox") el.checked = Boolean(f.default);
+      else el.value = f.default ?? "";
+    }));
+    toast("已填入默认值，记得保存");
+  });
   $("care-toggle").addEventListener("click", async () => {
     try {
       const r = await bridge.apiPost("care", {
@@ -296,9 +413,10 @@ function bind() {
     if (!tab) return;
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
     const name = tab.dataset.tab;
-    for (const key of ["facts", "persona", "care"]) {
+    for (const key of ["facts", "persona", "care", "settings"]) {
       $(`panel-${key}`).hidden = key !== name;
     }
+    if (name === "settings") loadSettings();
   });
 }
 

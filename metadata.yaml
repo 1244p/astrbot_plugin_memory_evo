@@ -1,8 +1,8 @@
 name: astrbot_plugin_memory_evo
 display_name: 记忆与人格演化
 desc: 私聊陪伴用的长期记忆 + 缓慢人格演化：只记住值得记的偏好与事实，人格按有限步长漂移并回归基线，自带可删可改的 WebUI 面板。
-help: /memory 查看命令。配置项见插件设置页。
-version: v0.5.1
+help: /memory 查看命令。配置项在 Dashboard 插件页的「设置」页签里改，保存即生效。
+version: v0.6.0
 author: you
 repo: https://github.com/1244p/astrbot_plugin_memory_evo
 astrbot_version: ">=4.26.0"

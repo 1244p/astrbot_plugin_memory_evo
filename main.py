@@ -17,7 +17,14 @@ from astrbot.api.star import Context, Star
 from astrbot.core.agent.message import TextPart
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
-from . import dashboard, extractor, persona, proactive
+try:  # 4.29 之前的版本没有这个 helper，退回插件数据目录下的 config/
+    from astrbot.core.utils.astrbot_path import get_astrbot_config_path
+except ImportError:  # pragma: no cover - 仅老版本走到
+
+    def get_astrbot_config_path() -> str:
+        return os.path.join(get_astrbot_plugin_data_path(), "config")
+
+from . import dashboard, extractor, persona, proactive, settings
 from .store import MemoryStore
 
 PLUGIN_NAME = "astrbot_plugin_memory_evo"
@@ -53,6 +60,9 @@ class MemoryEvoPlugin(Star):
         self._emb_provider = None
         self._emb_model = ""
         self._janitor: asyncio.Task | None = None
+        self._schema = settings.load_schema(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), settings.SCHEMA_FILENAME)
+        )
         self._register_views()
         self._start_janitor()
 
@@ -75,6 +85,7 @@ class MemoryEvoPlugin(Star):
             ("persona", self.api_persona, ["GET"], "人格状态与演化记录"),
             ("care", self.api_care, ["GET", "POST"], "主动消息状态与开关"),
             ("export", self.api_export, ["GET"], "导出会话记忆"),
+            ("settings", self.api_settings, ["GET", "POST"], "读取与保存插件设置"),
         ]
         for path, handler, methods, desc in routes:
             try:
@@ -188,6 +199,63 @@ class MemoryEvoPlugin(Star):
         return dashboard.care_block(
             self.store.conn, scope, float(self._get("care_min_idle_minutes", 90))
         )
+
+    async def api_settings(self):
+        from astrbot.api.web import json_response, request
+
+        if request.method.upper() == "POST":
+            payload = await self._body()
+            values = payload.get("values")
+            if not isinstance(values, dict):
+                values = payload
+            clean, errors = await asyncio.to_thread(settings.validate, self._schema, values)
+            if errors:
+                # 有任何字段不合法就整体不落盘，前端按 key 标红。
+                # 用 200 + ok:false 而不是 4xx：bridge 把非 2xx 直接 reject，前端拿不到字段级错误。
+                return json_response({"ok": False, "errors": errors})
+            changed = await asyncio.to_thread(self._save_settings, clean)
+            data = await asyncio.to_thread(settings.describe, self._schema, dict(self.cfg))
+            data.update(
+                {
+                    "ok": True,
+                    "changed": changed,
+                    "restart_required": sorted(set(changed) & settings.RESTART_FIELDS),
+                }
+            )
+            return json_response(data)
+
+        data = await asyncio.to_thread(settings.describe, self._schema, dict(self.cfg))
+        data["ok"] = True
+        return json_response(data)
+
+    def _save_settings(self, values: dict) -> list[str]:
+        """写回配置并让改动立刻生效。返回真正变化的字段名。"""
+        changed = settings.diff(dict(self.cfg), values)
+        if not changed:
+            return []
+
+        self.cfg.update(changed)  # self.cfg 就是 self.config，钩子下一轮即读到新值
+        saver = getattr(self.cfg, "save_config", None)
+        try:
+            if callable(saver):
+                saver()
+            else:  # 测试替身或极老的框架：直接合并进配置文件
+                settings.save_to_file(
+                    os.path.join(get_astrbot_config_path(), f"{PLUGIN_NAME}_config.json"),
+                    changed,
+                )
+        except Exception:
+            logger.exception(f"[memory_evo] 保存设置失败，已改动：{sorted(changed)}")
+            raise
+        logger.info(f"[memory_evo] 设置已更新：{sorted(changed)}")
+
+        if any(k.startswith("baseline_") for k in changed):
+            self.baseline = {k: float(self._get(f"baseline_{k}", 0.5)) for k in persona.TRAIT_KEYS}
+        if "embedding_provider_id" in changed:
+            self._emb_resolved = False
+            self._emb_provider = None
+            self._emb_model = ""
+        return sorted(changed)
 
     async def api_export(self):
         from astrbot.api.web import file_response, json_response

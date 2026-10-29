@@ -339,7 +339,7 @@ class ViewsTest(unittest.TestCase):
         plugin = self._make()
         try:
             paths = [r[0] for r in self.routes]
-            self.assertEqual(len(paths), 8)
+            self.assertEqual(len(paths), 9)  # v0.6.0 加了 settings
             prefix = f"/{main_mod.PLUGIN_NAME}/"
             for route, handler, methods, desc in self.routes:
                 self.assertTrue(route.startswith(prefix), route)
