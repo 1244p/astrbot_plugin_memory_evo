@@ -391,6 +391,14 @@ astrbot_plugin_memory_evo/
 └── tests/
 ```
 
+## 版本节奏
+
+`0.x` 阶段只保证「能装上、能用」，不承诺 API 稳定。发布规则写在 [CHANGELOG.md](CHANGELOG.md) 顶部，一句话版本：
+
+- 用户能感知的新能力、或需要用户动手的升级 → minor
+- 修 bug / 文档 / 提示词 → patch
+- 平时不建 tag，改动先进 `[Unreleased]`，攒够一次对外发布再定号
+
 ## Roadmap
 
 - [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
