@@ -391,6 +391,7 @@ class MemoryEvoPlugin(Star):
             "quiet_start": str(self._get("care_quiet_start", "23:30")),
             "quiet_end": str(self._get("care_quiet_end", "08:00")),
             "probability": float(self._get("care_probability", 0.85)),
+            "schedule": str(self._get("care_schedule", "") or ""),
         }
 
     @staticmethod
@@ -608,6 +609,7 @@ class MemoryEvoPlugin(Star):
                 f"未回应：{state['unanswered']} / {cfg['max_unanswered']}",
                 f"下次最早：{state['next_gap_minutes']} 分钟后",
                 f"免打扰：{cfg['quiet_start']} - {cfg['quiet_end']}",
+                ("允许时段：" + (cfg['schedule'] or "不限")),
             ]
             yield event.plain_result(chr(10).join(body))
             return

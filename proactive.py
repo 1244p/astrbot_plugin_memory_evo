@@ -69,6 +69,53 @@ def in_quiet_hours(now: datetime, start: str = "23:30", end: str = "08:00") -> b
     return now_min >= start_min or now_min < end_min
 
 
+def _strict_hhmm(value: str) -> tuple[int, int] | None:
+    """严格解析 HH:MM；越界（如 25:99）返回 None，不悄悄 clamp。"""
+    try:
+        hour, minute = str(value).strip().split(":")
+        h, m = int(hour), int(minute)
+    except Exception:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h, m
+
+
+def parse_schedule(value: str) -> list[tuple[int, int]]:
+    """把 "09:00-12:00,19:00-23:00" 解析成分钟区间列表；非法片段直接丢弃。"""
+    windows: list[tuple[int, int]] = []
+    for piece in str(value or "").replace("；", ",").replace("，", ",").split(","):
+        piece = piece.strip()
+        if not piece or "-" not in piece:
+            continue
+        left, _, right = piece.partition("-")
+        start_raw = _strict_hhmm(left)
+        end_raw = _strict_hhmm(right)
+        if start_raw is None or end_raw is None:
+            continue
+        sh, sm = start_raw
+        eh, em = end_raw
+        start, end = sh * 60 + sm, eh * 60 + em
+        if start == end:
+            continue
+        windows.append((start, end))
+    return windows
+
+
+def in_schedule(now: datetime, windows: list[tuple[int, int]]) -> bool:
+    """空列表表示不限时段。支持跨零点窗口，例如 22:00-02:00。"""
+    if not windows:
+        return True
+    now_min = now.hour * 60 + now.minute
+    for start, end in windows:
+        if start < end:
+            if start <= now_min < end:
+                return True
+        elif now_min >= start or now_min < end:
+            return True
+    return False
+
+
 def _today(now: datetime) -> str:
     return now.strftime("%Y-%m-%d")
 
@@ -96,6 +143,10 @@ def decide(
 
     if in_quiet_hours(now, cfg.get("quiet_start", "23:30"), cfg.get("quiet_end", "08:00")):
         return False, "quiet_hours"
+
+    windows = parse_schedule(str(cfg.get("schedule", "") or ""))
+    if not in_schedule(now, windows):
+        return False, "outside_schedule"
 
     if force:
         return True, "forced"

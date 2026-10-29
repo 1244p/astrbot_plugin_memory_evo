@@ -139,6 +139,63 @@ class SanitizeTest(unittest.TestCase):
         self.assertNotIn("__MEMORY__", prompt)
 
 
+class ScheduleTest(unittest.TestCase):
+    def test_parse_normal(self):
+        self.assertEqual(
+            proactive.parse_schedule("09:00-12:00, 19:00-23:00"),
+            [(540, 720), (1140, 1380)],
+        )
+
+    def test_parse_tolerates_garbage(self):
+        self.assertEqual(
+            proactive.parse_schedule("abc, 12:00-13:00, 08:00-08:00, ,25:99-26:00"),
+            [(720, 780)],
+        )
+
+    def test_parse_chinese_comma(self):
+        self.assertEqual(len(proactive.parse_schedule("09:00-12:00，19:00-23:00")), 2)
+
+    def test_empty_means_no_limit(self):
+        self.assertTrue(proactive.in_schedule(NOW.replace(hour=3), []))
+
+    def test_inside_and_outside(self):
+        w = proactive.parse_schedule("09:00-12:00")
+        self.assertTrue(proactive.in_schedule(NOW.replace(hour=10), w))
+        self.assertFalse(proactive.in_schedule(NOW.replace(hour=15), w))
+
+    def test_end_is_exclusive(self):
+        w = proactive.parse_schedule("09:00-12:00")
+        self.assertFalse(proactive.in_schedule(NOW.replace(hour=12, minute=0), w))
+        self.assertTrue(proactive.in_schedule(NOW.replace(hour=11, minute=59), w))
+
+    def test_wrap_window(self):
+        w = proactive.parse_schedule("22:00-02:00")
+        self.assertTrue(proactive.in_schedule(NOW.replace(hour=23), w))
+        self.assertTrue(proactive.in_schedule(NOW.replace(hour=1), w))
+        self.assertFalse(proactive.in_schedule(NOW.replace(hour=12), w))
+
+    def test_decide_blocks_outside_schedule(self):
+        cfg = dict(CFG, schedule="00:00-01:00")
+        ok, why = proactive.decide(NOW, state(), cfg)
+        self.assertEqual((ok, why), (False, "outside_schedule"))
+
+    def test_decide_passes_inside_schedule(self):
+        cfg = dict(CFG, schedule="14:00-16:00")
+        ok, why = proactive.decide(NOW, state(), cfg)
+        self.assertTrue(ok, why)
+
+    def test_quiet_beats_schedule(self):
+        night = NOW.replace(hour=1, minute=0)
+        cfg = dict(CFG, schedule="00:00-02:00")
+        ok, why = proactive.decide(night, state(last_active=night.timestamp() - 200 * 60), cfg)
+        self.assertEqual((ok, why), (False, "quiet_hours"))
+
+    def test_force_still_respects_schedule(self):
+        cfg = dict(CFG, schedule="00:00-01:00")
+        ok, why = proactive.decide(NOW, state(), cfg, force=True)
+        self.assertEqual((ok, why), (False, "outside_schedule"))
+
+
 class CareStateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

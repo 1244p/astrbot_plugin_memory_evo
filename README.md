@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.4.0-blue)
+![version](https://img.shields.io/badge/version-v0.4.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -220,6 +220,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `care_daily_max` | `3` | 每日主动上限 |
 | `care_max_unanswered` | `2` | 连续未回应几次后停止 |
 | `care_quiet_start` / `care_quiet_end` | `23:30` / `08:00` | 免打扰窗口，支持跨零点 |
+| `care_schedule` | 空 | 允许时段白名单，留空=不限；`09:00-12:00,19:00-23:00`，支持跨零点 |
 | `care_probability` | `0.85` | 满足条件后仍按概率决定 |
 | `care_max_chars` | `45` | 主动消息长度上限 |
 | `care_timezone` | `Asia/Shanghai` | 免打扰与时间判断用的时区 |
@@ -248,7 +249,8 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 flowchart LR
     T["每 60s 巡检"] --> A{"总开关 / 会话静音"}
     A -->|过| B{"免打扰时段"}
-    B -->|过| C{"空闲 ≥ 90 分钟"}
+    B -->|过| B2{"允许时段 care_schedule"}
+    B2 -->|过| C{"空闲 ≥ 90 分钟"}
     C -->|过| D{"今日未超 3 条"}
     D -->|过| E{"未回应 < 2 次"}
     E -->|过| F["模型决定 发/不发 + 下次间隔"]
@@ -260,7 +262,8 @@ flowchart LR
 |---|---|---|
 | 总开关 | 关 | `care_enable`，只对私聊生效 |
 | 最少空闲 | 90 分钟 | 用户刚说完话时绝不会插进来 |
-| 免打扰 | 23:30–08:00 | 支持跨零点窗口 |
+| 免打扰 | 23:30–08:00 | 黑名单，支持跨零点窗口 |
+| 允许时段 | `care_schedule` 留空=不限 | 白名单，填了之后只在窗口内发，如 `09:00-12:00,19:00-23:00` |
 | 每日上限 | 3 条 | 防止变成骚扰 |
 | 连续未回应 | 2 次后停 | 你不理它，它就闭嘴，等你先开口 |
 | 触发概率 | 0.85 | 满足条件也可能不发，避免过于规律 |
@@ -277,6 +280,15 @@ flowchart LR
 /memory care on       # 恢复
 /memory care now      # 立刻试发一条（跳过空闲/冷却/上限，仍守免打扰）
 ```
+
+**免打扰 vs 允许时段**：一个是黑名单，一个是白名单，冲突时**黑名单优先**。
+
+```
+care_quiet_start/end = 23:30/08:00     → 这两个时段绝不说
+care_schedule        = 09:00-12:00,19:00-23:00  → 只在这两段说
+```
+
+两者都支持跨零点（`22:00-02:00`）；`care_schedule` 留空就是不限时段，行为和 v0.4.0 一致，老配置不用改。一开始发不发由「空闲 + 每日上限 + 未回应」这些闸门管，**时段只是把可发的时间窗再收窄**。
 
 > 对比市场同类（`proactive_chat` 87k 下载、`proactive_care` 的链式唤醒、`private_companion` 的编排），这里的取舍是：**不另建一套状态，直接吃记忆和人格**。好处是零重复配置、说法有据可依；代价是没有独立面板，只能靠命令看。
 
@@ -329,7 +341,7 @@ python -m unittest discover -s tests -v
 ```
 
 ```
-Ran 64 tests — OK
+Ran 75 tests — OK
 ```
 
 覆盖：重复事实合并、改值 supersede、会话隔离、召回排序与预算、遗忘、人格步长/边界/回归、
@@ -355,6 +367,7 @@ astrbot_plugin_memory_evo/
 - [x] 置信度门控 + 矛盾检测 + 分类半衰期 + 注入多样性（v0.2.0）
 - [x] 语义召回：embedding + 余弦，失败自动回退（v0.3.0）
 - [x] 主动开口：空闲触发 + 免打扰 + 每日上限 + 模型决定下次间隔（v0.4.0）
+- [x] 主动开口支持允许时段白名单 `care_schedule`（v0.4.1）
 - [ ] `task` / `event` 带到期时间，到期主动提一句
 - [ ] 跨平台身份归一：`/memory link` 把 QQ / WebChat 的两个 umo 绑成同一个人
 - [ ] 事实超过阈值时做同槽位合并摘要
@@ -372,7 +385,7 @@ astrbot_plugin_memory_evo/
 不会无限增长：同一个 `(主体, 谓词)` 只有一条有效记录，改主意是 supersede 不是堆叠。真要清理，`/memory forget all` 一条命令。
 
 **Q：主动消息会不会刷屏？**
-默认关着；开了也有四道闸：最少空闲 90 分钟、每日 ≤3 条、连续 2 次没回应就停、23:30–08:00 不打扰。想更保守就把 `care_daily_max` 设成 1、`care_min_idle_minutes` 设成 180。
+默认关着；开了也有五道闸：最少空闲 90 分钟、每日 ≤3 条、连续 2 次没回应就停、23:30–08:00 不打扰、允许时段白名单。想更保守就把 `care_daily_max` 设成 1、`care_min_idle_minutes` 设成 180、`care_schedule` 填成 `10:00-11:00,21:00-22:00`。
 
 **Q：换平台 / 换号会丢记忆吗？**
 会。记忆的 key 是 `platform:message_type:session_id`，私聊里就是「平台 + 用户 ID」。QQ 和 WebChat 聊同一个人，是两份记忆。要打通得做身份归一（见 Roadmap）。

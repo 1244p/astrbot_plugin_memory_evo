@@ -151,6 +151,12 @@
     "hint": "HH:MM，例如 08:00。",
     "default": "08:00"
   },
+  "care_schedule": {
+    "description": "允许时段",
+    "type": "string",
+    "hint": "留空=不限时段。填了之后只有这些时段会主动发，例如 09:00-12:00,19:00-23:00；支持跨零点如 22:00-02:00。免打扰优先级更高。",
+    "default": ""
+  },
   "care_probability": {
     "description": "触发概率",
     "type": "float",
