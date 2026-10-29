@@ -1,0 +1,103 @@
+# Changelog
+
+本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+> 这一份也供 AstrBot Dashboard 的「更新日志」页读取（框架会找 `CHANGELOG.md` / `changelog.md` / `CHANGELOG` / `changelog`，找不到就打 WARN）。
+
+## [Unreleased]
+
+- 按周几区分的允许时段（如 `mon-fri:09:00-12:00`）
+- `task` / `event` 到期提醒
+- 跨平台身份归一 `/memory link`
+- 同槽位合并摘要、`/memory export`
+
+## [v0.4.1] - 2026-10-29
+
+### Added
+
+- **允许时段白名单** `care_schedule`：`"09:00-12:00,19:00-23:00"`，留空即不限时段，老配置行为不变
+- 支持跨零点窗口（`22:00-02:00`）与中文逗号分隔
+- `/memory care status` 增加「允许时段」一行
+
+### Fixed
+
+- 时段解析不再把越界值 clamp 成 `23:59`（`25:99-26:00` 原先会变成反向窗口，等于全天可发），
+  改用严格的 `_strict_hhmm`，非法片段直接丢弃
+- 免打扰（黑名单）与允许时段（白名单）冲突时明确黑名单优先；`/memory care now` 强制发送同样守这两道
+
+### Tests
+
+- 64 → 75：解析容错、中文逗号、端点左闭右开、跨零点、黑名单优先、force 仍守时段
+
+## [v0.4.0] - 2026-10-29
+
+### Added
+
+- **主动开口**：用户安静够久时自己发一条，只对私聊会话生效
+- 四道闸门：免打扰 `23:30–08:00`、每日上限 3 条、连续 2 次未回应即停、触发概率 0.85
+- 模型自决节奏：生成时返回 `next_gap_minutes`（15–240），下次巡检至少等这么久
+- 内容来自人格状态 + 记忆 top4 + 上次说过的话（防重复），非模板文案
+- `/memory care on|off|status|now`；会话级静音写入数据库，重启保持
+- 新增 `proactive.py`、`proactive` 表；配置项 `care_*` 十项，默认**关闭**
+
+### Tests
+
+- 61 → 64：决策矩阵、免打扰边界、会话静音、强制发送、模型选择沉默、真实发送链路
+
+## [v0.3.1] - 2026-10-29
+
+### Fixed
+
+- `extract_provider_id` / `embedding_provider_id` 填了不存在的 ID 时报出框架 WARN
+  `Provider xxx was not found.`，且不知道回退到了哪。现在插件自己先检查并告警一次：
+  `[memory_evo] extract_provider_id='x' 不存在，已退回当前会话模型。可用 ID：...`
+- 同一 provider 只告警一次，不再每个 flush 刷两条
+
+### Added
+
+- `scripts/health_report.py`：只读打开 `memory.db` 输出规模、类型分布、槽位 top8、
+  向量覆盖率、平均置信度、从未召回条数、未裁决冲突、人格版本与最近演化
+
+## [v0.3.0] - 2026-10-29
+
+### Added
+
+- **语义召回**：向量 L2 归一化后以 float32 存入 `facts.embedding`，点积即余弦，无需 numpy
+- `embedding_model` 不匹配时该条向量自动失效，不会拿错模型的向量算相似度
+- 后台每 20 秒为每个会话补写最多 16 条缺失向量；无 embedding provider 时静默回退字面重叠打分
+- `/memory reindex` 手动补写
+
+### Changed
+
+- 召回公式 `0.5*cos + 0.2*recency + 0.2*importance/5 + 0.1*confidence`，无向量时第一项换成字面重叠
+
+## [v0.2.0] - 2026-10-29
+
+### Added
+
+- **置信度门控**：`confidence < 0.45` 且 `importance < 5` 的事实不注入
+- **矛盾检测**：谓词经 `canonical_predicate` 归一（饮食偏好/忌口/口味 → 饮食），
+  极性相反且核心词相同 → 两条都标 `suspect`，用 `/memory confirm <id>` 裁决
+- **分类半衰期**：preference 30d / profile 60d / fact 14d / event 7d / task 1d
+- **注入多样性**：同槽位最多 2 条、单条最多 80 字
+
+### Tests
+
+- 21 → 30
+
+## [v0.1.0] - 2026-10-29
+
+### Added
+
+- 首版：SQLite 事实库（`facts` 表，含 supersede 链）、五维人格演化、LLM 抽取（每 6 轮或空闲 60 秒触发）
+- 注入走 `req.extra_user_content_parts`，绝不改 `req.system_prompt`（避免破坏提示词缓存）
+- `/memory dump|why|forget|persona`，工具 `memory_search` / `memory_write` / `memory_forget`
+- 零第三方依赖，纯标准库；MIT 许可；GitHub Actions 在 Python 3.10 / 3.12 跑测试
+
+[Unreleased]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.4.1...HEAD
+[v0.4.1]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.4.0...v0.4.1
+[v0.4.0]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.3.1...v0.4.0
+[v0.3.1]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.3.0...v0.3.1
+[v0.3.0]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.2.0...v0.3.0
+[v0.2.0]: https://github.com/1244p/astrbot_plugin_memory_evo/compare/v0.1.0...v0.2.0
+[v0.1.0]: https://github.com/1244p/astrbot_plugin_memory_evo/releases/tag/v0.1.0

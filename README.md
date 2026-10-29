@@ -176,6 +176,8 @@ persona_log(id, scope, traits JSON, reason, created_at)
 
 ---
 
+> 更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 安装
 
 **方式一：WebUI**
