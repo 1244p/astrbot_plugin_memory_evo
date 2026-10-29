@@ -324,5 +324,44 @@ class HookTest(unittest.TestCase):
         self.assertEqual(self.plugin.store.list_facts("aiocqhttp:FriendMessage:1"), [])
 
 
+class ViewsTest(unittest.TestCase):
+    """v0.5.0：Dashboard 视图后端注册（真实 register_web_api 的 stub 版）。"""
+
+    def _make(self):
+        ctx = sys.modules["astrbot.api.star"].Context()
+        self.routes = []
+        ctx.register_web_api = lambda route, handler, methods, desc: self.routes.append(
+            (route, handler, methods, desc)
+        )
+        return main_mod.MemoryEvoPlugin(ctx, _config(tempfile.mkdtemp()))
+
+    def test_routes_registered_with_plugin_prefix(self):
+        plugin = self._make()
+        try:
+            paths = [r[0] for r in self.routes]
+            self.assertEqual(len(paths), 8)
+            prefix = f"/{main_mod.PLUGIN_NAME}/"
+            for route, handler, methods, desc in self.routes:
+                self.assertTrue(route.startswith(prefix), route)
+                self.assertTrue(methods)
+                self.assertTrue(set(methods) <= {"GET", "POST"})
+                self.assertTrue(callable(handler))
+            self.assertIn(prefix + "overview", paths)
+            self.assertIn(["GET"], [m for r, _h, m, _d in self.routes if r.endswith("/overview")])
+            self.assertIn(prefix + "facts/delete", paths)
+        finally:
+            asyncio.run(plugin.terminate())
+
+    def test_old_framework_without_register_web_api(self):
+        ctx = sys.modules["astrbot.api.star"].Context()  # 没有 register_web_api
+        plugin = main_mod.MemoryEvoPlugin(ctx, _config(tempfile.mkdtemp()))
+        asyncio.run(plugin.terminate())
+
+    def test_view_assets_present(self):
+        root = os.path.join(PLUGIN_DIR, "views", "memory")
+        for name in ("index.html", "app.js", "style.css"):
+            self.assertTrue(os.path.isfile(os.path.join(root, name)), name)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

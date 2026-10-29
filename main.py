@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections import deque
@@ -16,7 +17,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.agent.message import TextPart
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
-from . import extractor, persona, proactive
+from . import dashboard, extractor, persona, proactive
 from .store import MemoryStore
 
 PLUGIN_NAME = "astrbot_plugin_memory_evo"
@@ -52,9 +53,164 @@ class MemoryEvoPlugin(Star):
         self._emb_provider = None
         self._emb_model = ""
         self._janitor: asyncio.Task | None = None
+        self._register_views()
         self._start_janitor()
 
     # ---------------- 基础设施 ----------------
+
+    # ---------------- Dashboard 视图后端 ----------------
+
+    def _register_views(self) -> None:
+        """注册 WebUI 插件视图用的 API。老版本 AstrBot 没有 register_web_api，直接跳过。"""
+        register = getattr(self.context, "register_web_api", None)
+        if register is None:
+            logger.debug("[memory_evo] 当前 AstrBot 不支持插件视图，跳过 Web API 注册")
+            return
+        routes = [
+            ("scopes", self.api_scopes, ["GET"], "列出有记忆的会话"),
+            ("overview", self.api_overview, ["GET"], "单个会话的记忆概览"),
+            ("facts", self.api_facts, ["GET"], "分页列出事实"),
+            ("facts/delete", self.api_delete_facts, ["POST"], "删除选定事实"),
+            ("facts/confirm", self.api_confirm_facts, ["POST"], "确认待确认事实"),
+            ("persona", self.api_persona, ["GET"], "人格状态与演化记录"),
+            ("care", self.api_care, ["GET", "POST"], "主动消息状态与开关"),
+            ("export", self.api_export, ["GET"], "导出会话记忆"),
+        ]
+        for path, handler, methods, desc in routes:
+            try:
+                register(f"/{PLUGIN_NAME}/{path}", handler, methods, desc)
+            except Exception:
+                logger.exception(f"[memory_evo] 注册视图 API 失败：{path}")
+
+    async def api_scopes(self):
+        from astrbot.api.web import json_response
+
+        rows = await asyncio.to_thread(dashboard.list_scopes, self.store.conn)
+        return json_response({"items": rows})
+
+    def _query_scope(self) -> str:
+        from astrbot.api.web import request
+
+        scope = request.query.get("scope") or ""
+        if not scope:
+            scopes = dashboard.list_scopes(self.store.conn)
+            scope = scopes[0]["scope"] if scopes else ""
+        return scope
+
+    async def api_overview(self):
+        from astrbot.api.web import json_response
+
+        scope = self._query_scope()
+        if not scope:
+            return json_response({"scope": "", "empty": True})
+        data = await asyncio.to_thread(dashboard.overview, self.store.conn, scope)
+        data["care"] = await asyncio.to_thread(dashboard.care_block, self.store.conn, scope)
+        data["care"]["settings"] = self._care_cfg()
+        data["persona"] = await asyncio.to_thread(
+            dashboard.persona_block, self.store.conn, scope, self.baseline
+        )
+        return json_response(data)
+
+    async def api_facts(self):
+        from astrbot.api.web import json_response, request
+
+        scope = self._query_scope()
+        q = request.query.get("q", "") or ""
+        kind = request.query.get("kind", "") or ""
+        status = request.query.get("status", "") or ""
+        limit = request.query.get("limit", 50, type=int) or 50
+        offset = request.query.get("offset", 0, type=int) or 0
+        data = await asyncio.to_thread(
+            dashboard.list_facts, self.store.conn, scope, q, kind, status, limit, offset
+        )
+        return json_response(data)
+
+    async def _body(self) -> dict:
+        from astrbot.api.web import request
+
+        payload = await request.json(default={})
+        return payload if isinstance(payload, dict) else {}
+
+    async def api_delete_facts(self):
+        from astrbot.api.web import error_response, json_response
+
+        payload = await self._body()
+        scope = str(payload.get("scope") or "")
+        ids = payload.get("ids") or []
+        if not scope or not isinstance(ids, list):
+            return error_response("需要 scope 与 ids", status_code=400)
+        deleted = await asyncio.to_thread(
+            dashboard.delete_many, self.store.conn, scope, ids
+        )
+        logger.info(f"[memory_evo] WebUI 删除 {deleted} 条记忆 scope={scope} ids={ids}")
+        return json_response({"deleted": deleted})
+
+    async def api_confirm_facts(self):
+        from astrbot.api.web import error_response, json_response
+
+        payload = await self._body()
+        scope = str(payload.get("scope") or "")
+        ids = payload.get("ids") or []
+        if not scope or not isinstance(ids, list):
+            return error_response("需要 scope 与 ids", status_code=400)
+        changed = await asyncio.to_thread(
+            dashboard.confirm_many, self.store.conn, scope, ids
+        )
+        return json_response({"confirmed": changed})
+
+    async def api_persona(self):
+        from astrbot.api.web import json_response
+
+        scope = self._query_scope()
+        data = await asyncio.to_thread(
+            dashboard.persona_block, self.store.conn, scope, self.baseline
+        )
+        return json_response(data)
+
+    async def api_care(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        if request.method.upper() == "POST":
+            payload = await self._body()
+            scope = str(payload.get("scope") or "")
+            if not scope or "enabled" not in payload:
+                return error_response("需要 scope 与 enabled", status_code=400)
+            await asyncio.to_thread(
+                self.store.set_care_enabled, scope, bool(payload.get("enabled"))
+            )
+            return json_response(await asyncio.to_thread(
+                dashboard.care_block, self.store.conn, scope
+            ))
+        scope = self._query_scope()
+        data = await asyncio.to_thread(dashboard.care_block, self.store.conn, scope)
+        data["settings"] = self._care_cfg()
+        return json_response(data)
+
+    async def api_export(self):
+        from astrbot.api.web import file_response, json_response
+
+        scope = self._query_scope()
+        if not scope:
+            return json_response({"error": "no scope"})
+        payload = await asyncio.to_thread(dashboard.export_payload, self.store.conn, scope)
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        name = f"memory-{scope.replace(':', '_')[:60]}.json"
+
+        def write() -> str:
+            outdir = os.path.join(
+                get_astrbot_plugin_data_path(), PLUGIN_NAME, "exports"
+            )
+            os.makedirs(outdir, exist_ok=True)
+            path = os.path.join(outdir, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return path
+
+        # file_response 要的是磁盘路径，不是字节；导出文件落在插件数据目录里
+        path = await asyncio.to_thread(write)
+        return file_response(
+            path, filename=name, content_type="application/json; charset=utf-8"
+        )
 
     def _get(self, key: str, default):
         value = self.cfg.get(key, default) if hasattr(self.cfg, "get") else default

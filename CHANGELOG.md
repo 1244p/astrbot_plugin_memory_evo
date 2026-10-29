@@ -9,7 +9,35 @@
 - 按周几区分的允许时段（如 `mon-fri:09:00-12:00`）
 - `task` / `event` 到期提醒
 - 跨平台身份归一 `/memory link`
-- 同槽位合并摘要、`/memory export`
+- 同槽位合并摘要
+
+## [v0.5.0] - 2026-10-29
+
+### Added
+
+- **WebUI 面板**（`views/memory/`）：在 AstrBot Dashboard → 插件 → 详情页里打开，三个页签
+  - 记忆：搜索 / 按类型与状态筛选、分页、勾选批量删除、批量确认待确认条目、导出该会话 JSON
+  - 人格：五维当前值（带基线刻度）+ 演化时间线（版本号、原因、当时各维取值）
+  - 主动消息：本会话开关、今日已发/上限、连续未回应、下次最早间隔、免打扰与允许时段
+- 后端只暴露 8 个插件内路由：`scopes` / `overview` / `facts` / `facts/delete` / `facts/confirm` / `persona` / `care` / `export`，
+  全部通过 `context.register_web_api()` 注册，走 Dashboard 的插件转发（`/api/v1/plugins/extensions/<plugin>/...`）
+- 面板语言与主题跟随 Dashboard（`bridge.ready()` 的 `isDark` / `locale`），零前端依赖，单文件 `app.js`
+
+### Security / 边界
+
+- 面板只操作**当前选中的会话**：删除与确认都带 `scope` 条件，跨会话 id 传进来也删不动（有测试）
+- `confirm` 只认 `status = 'suspect'`，不会把已取代/已生效的条目顺手改写
+- 面板不是常开服务：路由仅在插件加载时注册，不额外监听端口
+
+### Compatibility
+
+- 老版本 AstrBot 没有 `register_web_api` 时自动跳过注册，插件其余功能照常；面板需要 AstrBot ≥ 4.29
+- 面板读取的是同一个 `memory.db`，与 `/memory` 命令看到的数据一致
+
+### Tests
+
+- 75 → 100：视图注册（路由前缀、方法、无 `register_web_api` 的降级）、静态资源存在、概览统计、筛选分页、
+  跨会话删除隔离、`confirm` 只动 suspect、人格与主动消息区块、导出 JSON 可序列化
 
 ## [v0.4.1] - 2026-10-29
 
