@@ -79,6 +79,9 @@ def _install_stubs(tmpdir: str) -> None:
         def get_all_embedding_providers(self):
             return list(self.embedding_providers)
 
+        def get_all_providers(self):
+            return [self.provider] if self.provider is not None else []
+
         async def get_using_provider_async(self, _umo=None):
             return self.provider
 
@@ -231,6 +234,24 @@ class HookTest(unittest.TestCase):
         self.assertIn("<memory>", text)
         self.assertIn("香菜", text)
         self.assertGreater(emb.calls, 0)
+
+    def test_missing_extract_provider_warns_once_and_falls_back(self):
+        self.plugin.cfg["extract_provider_id"] = "siliconflow"  # 不存在的旧 ID
+        self.plugin.context.provider = FakeProvider("{}")
+        first = asyncio.run(self.plugin._provider("s"))
+        second = asyncio.run(self.plugin._provider("s"))
+        self.assertIs(first, self.plugin.context.provider)  # 回退到当前会话模型
+        self.assertIs(second, self.plugin.context.provider)
+        self.assertIn("extract:siliconflow", self.plugin._warned)  # 有提醒
+        self.assertEqual(len([k for k in self.plugin._warned if k.startswith("extract:")]), 1)
+
+    def test_missing_embedding_provider_falls_back_to_first_available(self):
+        emb = FakeEmbedder()
+        self.plugin.context.embedding_providers = [emb]
+        self.plugin.cfg["embedding_provider_id"] = "nope"
+        self.plugin._emb_resolved = False
+        self.assertIs(self.plugin._embedder(), emb)
+        self.assertIn("embedding:nope", self.plugin._warned)
 
     def test_write_then_forget(self):
         asyncio.run(self.plugin.tool_write(FakeEvent(), "用户对花生过敏", "profile", 5))

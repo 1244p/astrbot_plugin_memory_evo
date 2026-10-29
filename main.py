@@ -43,6 +43,7 @@ class MemoryEvoPlugin(Star):
         self.buffers: dict[str, deque[tuple[str, str, float]]] = {}
         self.inflight: set[str] = set()
         self._scopes: set[str] = set()
+        self._warned: set[str] = set()
         self._emb_resolved = False
         self._emb_provider = None
         self._emb_model = ""
@@ -96,7 +97,39 @@ class MemoryEvoPlugin(Star):
             provider = self.context.get_provider_by_id(provider_id)
             if provider:
                 return provider
+            self._warn_missing_provider("extract", provider_id)
         return await self.context.get_using_provider_async(umo)
+
+    def _available_ids(self, embed: bool = False) -> list[str]:
+        try:
+            providers = (
+                self.context.get_all_embedding_providers()
+                if embed
+                else self.context.get_all_providers()
+            )
+        except Exception:
+            return []
+        ids: list[str] = []
+        for provider in providers or []:
+            try:
+                ids.append(str(provider.provider_config.get("id", "") or "?"))
+            except Exception:
+                ids.append("?")
+        return ids
+
+    def _warn_missing_provider(self, kind: str, pid: str, embed: bool = False) -> None:
+        """配置的 provider ID 不存在时，只提醒一次，并列出真实可用的 ID。"""
+        key = f"{kind}:{pid}"
+        if key in self._warned:
+            return
+        self._warned.add(key)
+        available = self._available_ids(embed)
+        hint = "、".join(available) if available else "（当前没有任何可用的 provider）"
+        fallback = "第一个可用 embedding" if embed else "当前会话模型"
+        logger.warning(
+            f"[memory_evo] {kind}_provider_id={pid!r} 不存在，已退回{fallback}。"
+            f"可用 ID：{hint}"
+        )
 
     def _embedder(self):
         """解析 embedding provider：显式配置优先，否则取第一个可用的。"""
@@ -107,6 +140,8 @@ class MemoryEvoPlugin(Star):
         pid = str(self._get("embedding_provider_id", "") or "")
         if pid:
             provider = self.context.get_provider_by_id(pid)
+            if provider is None:
+                self._warn_missing_provider("embedding", pid, embed=True)
         if provider is None:
             try:
                 providers = self.context.get_all_embedding_providers()
