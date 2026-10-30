@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.6.0-blue)
+![version](https://img.shields.io/badge/version-v0.6.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
