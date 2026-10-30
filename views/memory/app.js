@@ -10,6 +10,8 @@ const state = {
   care: null,
   persona: null,
   settings: null,
+  settingsFilter: "",
+  snapshot: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -38,22 +40,30 @@ function toast(msg, bad = false) {
   toast._t = setTimeout(() => (el.hidden = true), 2600);
 }
 
-function when(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  const diff = (Date.now() - d.getTime()) / 1000;
-  const abs = d.toLocaleString();
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  return abs.slice(0, 16);
-}
-
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+
+function when(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
+function clock(ts) {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/* ---------------- 载入 ---------------- */
 
 async function loadScopes() {
   const data = await bridge.apiGet("scopes");
@@ -77,20 +87,23 @@ async function loadOverview() {
   state.care = d.care;
   state.persona = d.persona;
   const s = d.by_status || {};
-  const vec = d.total ? Math.round((1 - d.no_embedding / Math.max(1, d.total - (s.superseded || 0))) * 100) : 0;
-  const cards = [
-    ["有效记忆", s.active ?? 0, "primary"],
-    ["待确认", s.suspect ?? 0, s.suspect ? "warn" : ""],
+  const active = s.active ?? 0;
+  const suspect = s.suspect ?? 0;
+  const live = Math.max(1, d.total - (d.superseded || 0));
+  const vec = d.total ? Math.round((1 - d.no_embedding / live) * 100) : 0;
+  const stats = [
+    ["有效记忆", active, "accent"],
+    ["待确认", suspect, suspect ? "warn" : ""],
     ["已取代", d.superseded ?? 0, ""],
     ["平均置信度", d.avg_confidence ?? 0, ""],
     ["向量覆盖", `${Math.max(0, Math.min(100, vec))}%`, ""],
     ["从未召回", d.never_hit ?? 0, ""],
   ];
-  $("stats").innerHTML = cards
+  $("stats").innerHTML = stats
     .map(([label, value, cls]) => `
-      <div class="card ${cls}">
-        <span class="card-value">${esc(value)}</span>
-        <span class="card-label">${esc(label)}</span>
+      <div class="stat ${cls}">
+        <span class="stat-value">${esc(value)}</span>
+        <span class="stat-label">${esc(label)}</span>
       </div>`)
     .join("");
   $("scope-hint").textContent = d.label || "";
@@ -108,23 +121,45 @@ async function loadFacts() {
   renderFacts();
 }
 
+/* ---------------- 记忆列表 ---------------- */
+
 function renderFacts() {
-  const body = $("facts-body");
+  const list = $("facts-list");
   $("facts-empty").hidden = state.items.length > 0;
-  body.innerHTML = state.items
+  $("list-count").textContent = state.total ? `记忆条目 · 共 ${state.total} 条` : "记忆条目";
+  list.innerHTML = state.items
     .map((f) => {
-      const dim = f.status === "superseded" ? " dim" : "";
-      return `<tr class="${dim.trim()}" data-id="${f.id}">
-        <td class="c"><input type="checkbox" class="pick" value="${f.id}" /></td>
-        <td class="c mono">${f.id}</td>
-        <td><span class="slot">${esc(f.predicate)}</span> ${esc(f.object)}</td>
-        <td class="c"><span class="tag">${esc(KIND_LABEL[f.kind] || f.kind)}</span></td>
-        <td class="c mono">${f.importance}</td>
-        <td class="c mono">${f.confidence}</td>
-        <td class="c mono">${f.hits}</td>
-        <td class="c"><span class="status ${esc(f.status)}">${esc(STATUS_LABEL[f.status] || f.status)}</span></td>
-        <td class="c nowrap">${esc(when(f.updated_at))}</td>
-      </tr>`;
+      const cls = (f.status === "superseded" ? " is-superseded" : "") + (f.status === "suspect" ? " is-suspect" : "");
+      const conf = Number(f.confidence ?? 0);
+      const low = conf < 0.6 ? " low" : "";
+      return `<li class="fact${cls}" data-id="${f.id}">
+        <label class="check"><input type="checkbox" class="pick" value="${f.id}" /></label>
+        <div class="fact-body">
+          <div class="fact-text">
+            <span class="slot">${esc(f.predicate)}</span><span class="obj">${esc(f.object)}</span>
+          </div>
+          <div class="fact-meta">
+            <span>${esc(KIND_LABEL[f.kind] || f.kind)}</span>
+            <span class="sep"></span>
+            <span>重要 ${f.importance}</span>
+            <span class="sep"></span>
+            <span class="meter${low}" title="置信度"><i><b style="width:${Math.round(conf * 100)}%"></b></i>${conf}</span>
+            <span class="sep"></span>
+            <span>召回 ${f.hits} 次</span>
+            <span class="sep"></span>
+            <span>更新 ${esc(when(f.updated_at))}</span>
+            <span class="sep"></span>
+            <span class="mono">#${f.id}</span>
+          </div>
+        </div>
+        <div class="fact-side">
+          <span class="pill ${esc(f.status)}">${esc(STATUS_LABEL[f.status] || f.status)}</span>
+          <div class="row-actions">
+            ${f.status === "suspect" ? `<button class="btn quiet sm" data-act="confirm" data-id="${f.id}">确认</button>` : ""}
+            <button class="btn quiet sm" data-act="delete" data-id="${f.id}">删</button>
+          </div>
+        </div>
+      </li>`;
     })
     .join("");
   const from = state.total ? state.offset + 1 : 0;
@@ -132,7 +167,35 @@ function renderFacts() {
   $("pager-info").textContent = `${from}–${to} / 共 ${state.total} 条`;
   $("prev").disabled = state.offset <= 0;
   $("next").disabled = state.offset + state.limit >= state.total;
+  $("check-all").checked = false;
+  syncSelection();
 }
+
+function selectedIds() {
+  return [...document.querySelectorAll(".pick:checked")].map((el) => Number(el.value));
+}
+
+function syncSelection() {
+  const ids = selectedIds();
+  const bar = $("bulkbar");
+  bar.hidden = ids.length === 0;
+  $("bulk-count").textContent = `已选 ${ids.length} 条`;
+}
+
+async function act(ids, kind) {
+  if (!ids.length) return;
+  if (kind === "delete" && !confirm(`删除这 ${ids.length} 条记忆？删了就找不回来。`)) return;
+  try {
+    const r = await bridge.apiPost(`facts/${kind}`, { scope: state.scope, ids });
+    if (kind === "delete") toast(`已删除 ${r.deleted} 条`);
+    else toast(`已确认 ${r.confirmed} 条`);
+    await reload();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/* ---------------- 人格 ---------------- */
 
 function renderPersona() {
   const p = state.persona;
@@ -143,31 +206,50 @@ function renderPersona() {
     .map((k) => {
       const v = Math.round((traits[k] ?? 0.5) * 100);
       const b = Math.round((base[k] ?? 0.5) * 100);
+      const d = v - b;
       return `<div class="trait">
-        <div class="trait-head"><span>${TRAIT_LABEL[k]}</span><span class="mono">${v}</span></div>
+        <div class="trait-head">
+          <span class="trait-name">${TRAIT_LABEL[k]}</span>
+          <span class="trait-num">${v}</span>
+        </div>
         <div class="trait-bar"><i style="width:${v}%"></i><b style="left:${b}%"></b></div>
+        <div class="trait-foot">基线 ${b} · 偏离 ${d > 0 ? "+" : ""}${d}</div>
       </div>`;
     })
     .join("");
-  $("persona-log").innerHTML = (p.log || [])
-    .slice()
-    .reverse()
-    .map((row) => {
-      const t = row.traits || {};
+
+  const log = (p.log || []).slice();
+  if (!log.length) {
+    $("persona-log").innerHTML = `<li><div class="tl-reason hint">还没有演化记录，人格仍是初始值。</div></li>`;
+    return;
+  }
+  $("persona-log").innerHTML = log
+    .map((row, i) => {
+      const cur = row.traits || {};
+      const prevRaw = i > 0 ? log[i - 1].traits || {} : null;
+      const chips = Object.keys(TRAIT_LABEL)
+        .map((k) => {
+          const now = Math.round((cur[k] ?? 0.5) * 100);
+          const before = prevRaw ? Math.round((prevRaw[k] ?? 0.5) * 100) : Math.round((base[k] ?? 0.5) * 100);
+          const d = now - before;
+          if (!d) return "";
+          return `<span class="delta${d < 0 ? " down" : ""}">${TRAIT_LABEL[k]} ${d > 0 ? "+" : ""}${d}</span>`;
+        })
+        .filter(Boolean)
+        .join("");
       return `<li>
-        <span class="mono v">v${row.version}</span>
-        <span class="reason">${esc(row.reason || "（无说明）")}</span>
-        <span class="hint">${esc(when(row.created_at))}</span>
-        <span class="traits-mini">${Object.keys(TRAIT_LABEL).map((k) => `${TRAIT_LABEL[k]} ${Math.round((t[k] ?? 0.5) * 100)}`).join(" · ")}</span>
+        <div class="tl-head">
+          <span class="tl-ver">v${row.version}</span>
+          <span class="tl-reason">${esc(row.reason || "（无说明）")}</span>
+          <span class="tl-time">${esc(when(row.created_at))}</span>
+        </div>
+        ${chips ? `<div class="tl-deltas">${chips}</div>` : ""}
       </li>`;
     })
-    .join("") || `<li class="hint">还没有演化记录，人格仍是初始值。</li>`;
+    .join("");
 }
 
-function clock(ts) {
-  const d = new Date(ts * 1000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
+/* ---------------- 主动消息 ---------------- */
 
 const REASON_TEXT = {
   never_sent: "还没主动发过，只看空闲",
@@ -176,41 +258,66 @@ const REASON_TEXT = {
 };
 
 function nextText(c) {
-  const at = c.next_at || 0;
-  if (!at) return "现在就可以";
-  if (c.ready) return "现在就可以";
+  if (c.ready || !c.next_at) return "现在就可以";
+  const at = c.next_at;
   const mins = Math.max(1, Math.ceil((at - Date.now() / 1000) / 60));
-  const label = clock(at);
   const today = new Date(at * 1000).toDateString() === new Date().toDateString();
-  return `${today ? "" : "明天 "}${label}（${mins} 分钟后）`;
+  return `${today ? "" : "明天 "}${clock(at)}（${mins} 分钟后）`;
 }
 
 function renderCare() {
   const c = state.care || {};
-  const s = (c.settings || {});
-  const rows = [
-    ["本会话", c.enabled ? "开" : "关"],
-    ["今日已发", `${c.sent_today ?? 0} / ${s.daily_max ?? "—"}`],
-    ["连续未回应", `${c.unanswered ?? 0} / ${s.max_unanswered ?? "—"}`],
-    ["下次最早", nextText(c)],
-    ["判定依据", REASON_TEXT[c.next_reason] || "空闲 + 间隔都满足"],
-    ["空闲要求", `${s.min_idle_minutes ?? c.min_idle_minutes ?? "—"} 分钟`],
-    ["免打扰", s.quiet_start ? `${s.quiet_start} - ${s.quiet_end}` : "—"],
-    ["允许时段", s.schedule || "不限"],
-    ["总开关", s.enabled ? "开" : "关"],
-  ];
-  $("care-grid").innerHTML = rows
-    .map(([k, v]) => `<div class="care-cell"><span class="care-k">${esc(k)}</span><span class="care-v">${esc(v)}</span></div>`)
+  const s = c.settings || {};
+  const hero = $("care-hero");
+  let cls = "wait";
+  let title = "";
+  if (!s.enabled) {
+    title = "总开关关着（care_enable）";
+  } else if (!c.enabled) {
+    title = "这个会话的主动消息关着";
+  } else if (c.ready) {
+    cls = "ready";
+    title = "现在就可以主动开口";
+  } else {
+    title = `还要等 ${Math.max(1, Math.ceil(((c.next_at || 0) - Date.now() / 1000) / 60))} 分钟`;
+  }
+  hero.className = `care-hero ${cls}`;
+  $("care-mark").textContent = cls === "ready" ? "✓" : "…";
+  $("care-state").textContent = title;
+  const basis = REASON_TEXT[c.next_reason] || "空闲与间隔都满足";
+  $("care-because").textContent = `${basis} · 下次最早 ${nextText(c)}`;
+
+  // 后端没给的项直接不渲染，避免出现一排「— 字」这种半截话
+  const gates = [];
+  const gate = (k, v) => {
+    if (v === undefined || v === null || v === "") return;
+    gates.push([k, v]);
+  };
+  gate("今日已发", `${c.sent_today ?? 0} / ${s.daily_max ?? "—"}`);
+  gate("连续未回应", `${c.unanswered ?? 0} / ${s.max_unanswered ?? "—"}`);
+  gate("空闲要求", `${s.min_idle_minutes ?? c.min_idle_minutes ?? "—"} 分钟`);
+  gate("免打扰", s.quiet_start ? `${s.quiet_start} – ${s.quiet_end}` : "");
+  gate("允许时段", s.schedule || "不限");
+  gate("发送概率", s.probability);
+  gate("单条上限", s.max_chars ? `${s.max_chars} 字` : "");
+  gate("判定依据", REASON_TEXT[c.next_reason] || "");
+  $("care-grid").innerHTML = gates
+    .map(([k, v]) => `<div class="gate"><span class="gate-k">${esc(k)}</span><span class="gate-v">${esc(v)}</span></div>`)
     .join("");
-  const last = c.last_text ? `<div class="care-last">上次主动说：${esc(c.last_text)}</div>` : "";
-  $("care-grid").insertAdjacentHTML("beforeend", last);
-  $("care-grid").insertAdjacentHTML(
-    "beforeend",
-    `<div class="care-last">下次最早 = max(距上次主动的间隔, 距用户最后一句的空闲要求)；
-     免打扰与允许时段另算——即使时间到了，也不一定就在窗口里。</div>`,
-  );
-  $("care-toggle").textContent = c.enabled ? "关闭这个会话的主动消息" : "开启这个会话的主动消息";
+
+  const last = $("care-last");
+  if (c.last_text) {
+    last.hidden = false;
+    last.innerHTML = `<b>上次主动说</b>${esc(c.last_text)}`;
+  } else {
+    last.hidden = true;
+  }
+
+  $("care-toggle-input").checked = Boolean(c.enabled);
+  $("care-toggle-label").textContent = c.enabled ? "这个会话已开启" : "这个会话已关闭";
 }
+
+/* ---------------- 设置 ---------------- */
 
 function fieldInput(f) {
   const id = `set-${f.key}`;
@@ -233,34 +340,65 @@ function renderSettings() {
     $("settings-groups").innerHTML = `<p class="empty">设置加载失败，刷新试试。</p>`;
     return;
   }
-  $("settings-groups").innerHTML = (data.groups || [])
-    .filter((g) => (g.fields || []).length)
+  const needle = state.settingsFilter.trim().toLowerCase();
+  const match = (f) =>
+    !needle ||
+    [f.key, f.label, f.hint].filter(Boolean).some((s) => String(s).toLowerCase().includes(needle));
+
+  const groups = (data.groups || [])
+    .map((g) => ({ ...g, fields: (g.fields || []).filter(match) }))
+    .filter((g) => g.fields.length);
+
+  if (!groups.length) {
+    $("settings-groups").innerHTML = `<p class="empty">没有匹配「${esc(needle)}」的配置项。</p>`;
+    return;
+  }
+
+  $("settings-groups").innerHTML = groups
     .map((g) => `
       <section class="set-group">
-        <h2 class="sub">${esc(g.title)}</h2>
+        <h2 class="sec">${esc(g.title)}<span class="hint">${g.fields.length} 项</span></h2>
         <div class="set-fields">
           ${g.fields.map((f) => `
-            <div class="set-field" data-field="${esc(f.key)}">
-              <label for="set-${esc(f.key)}">
-                ${esc(f.label)}
-                ${f.restart ? `<span class="badge">需重启</span>` : ""}
-              </label>
-              ${fieldInput(f)}
+            <div class="set-field${f.type === "bool" ? " is-bool" : ""}" data-field="${esc(f.key)}">
+              <div class="field-head">
+                <label for="set-${esc(f.key)}">
+                  ${esc(f.label)}
+                  ${f.restart ? `<span class="badge">需重启</span>` : ""}
+                </label>
+                ${f.type === "bool" ? fieldInput(f) : ""}
+              </div>
+              ${f.type === "bool" ? "" : fieldInput(f)}
               ${f.hint ? `<p class="hint">${esc(f.hint)}</p>` : ""}
               <p class="field-error" data-error="${esc(f.key)}" hidden></p>
             </div>`).join("")}
         </div>
       </section>`)
     .join("");
+  state.snapshot = readSettingsForm();
+  updateDirty();
 }
 
 function readSettingsForm() {
   const values = {};
   document.querySelectorAll("#settings-groups [data-key]").forEach((el) => {
-    const key = el.dataset.key;
-    values[key] = el.type === "checkbox" ? el.checked : el.value;
+    values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value;
   });
   return values;
+}
+
+function updateDirty() {
+  const now = readSettingsForm();
+  const changed = Object.keys(now).filter((k) => {
+    const before = state.snapshot[k];
+    if (before === undefined) return false;
+    if (typeof now[k] === "boolean" || typeof before === "boolean") return Boolean(now[k]) !== Boolean(before);
+    return String(now[k]) !== String(before);
+  });
+  const el = $("settings-dirty");
+  el.classList.toggle("on", changed.length > 0);
+  el.textContent = changed.length ? `已改 ${changed.length} 项，待保存` : "没有改动";
+  return changed;
 }
 
 function clearFieldErrors() {
@@ -268,6 +406,7 @@ function clearFieldErrors() {
     el.hidden = true;
     el.textContent = "";
   });
+  document.querySelectorAll(".set-field.has-error").forEach((el) => el.classList.remove("has-error"));
 }
 
 async function saveSettings() {
@@ -278,7 +417,9 @@ async function saveSettings() {
     if (r && r.ok === false) {
       const errors = r.errors || {};
       Object.entries(errors).forEach(([key, msg]) => {
+        const holder = document.querySelector(`.set-field[data-field="${key}"]`);
         const el = document.querySelector(`[data-error="${key}"]`);
+        if (holder) holder.classList.add("has-error");
         if (el) {
           el.textContent = msg;
           el.hidden = false;
@@ -317,6 +458,8 @@ async function loadSettings(force = false) {
   }
 }
 
+/* ---------------- 主流程 ---------------- */
+
 async function reload() {
   if (!state.scope) return;
   try {
@@ -326,10 +469,6 @@ async function reload() {
   }
 }
 
-function selectedIds() {
-  return [...document.querySelectorAll(".pick:checked")].map((el) => Number(el.value));
-}
-
 function bind() {
   $("scope").addEventListener("change", async (e) => {
     state.scope = e.target.value;
@@ -337,14 +476,36 @@ function bind() {
     await reload();
   });
   $("refresh").addEventListener("click", reload);
-  $("search").addEventListener("click", () => {
-    state.filters = { q: $("q").value.trim(), kind: $("kind").value, status: $("status").value };
+
+  // 搜索：输入即搜（防抖），不用按钮
+  let timer = null;
+  $("q").addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      state.filters = { ...state.filters, q: $("q").value.trim() };
+      state.offset = 0;
+      loadFacts().catch((e) => toast(e.message, true));
+    }, 260);
+  });
+
+  $("kind-chips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    [...$("kind-chips").children].forEach((c) => c.classList.toggle("on", c === chip));
+    state.filters = { ...state.filters, kind: chip.dataset.kind };
     state.offset = 0;
-    loadFacts().catch((e) => toast(e.message, true));
+    loadFacts().catch((err) => toast(err.message, true));
   });
-  $("q").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") $("search").click();
+
+  $("status-chips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    [...$("status-chips").children].forEach((c) => c.classList.toggle("on", c === chip));
+    state.filters = { ...state.filters, status: chip.dataset.status };
+    state.offset = 0;
+    loadFacts().catch((err) => toast(err.message, true));
   });
+
   $("prev").addEventListener("click", () => {
     state.offset = Math.max(0, state.offset - state.limit);
     loadFacts().catch((e) => toast(e.message, true));
@@ -353,38 +514,40 @@ function bind() {
     state.offset += state.limit;
     loadFacts().catch((e) => toast(e.message, true));
   });
+
+  $("facts-list").addEventListener("change", (e) => {
+    if (e.target.classList.contains("pick")) syncSelection();
+  });
+  $("facts-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    act([Number(btn.dataset.id)], btn.dataset.act);
+  });
   $("check-all").addEventListener("change", (e) => {
     document.querySelectorAll(".pick").forEach((el) => (el.checked = e.target.checked));
+    syncSelection();
   });
-  $("delete-selected").addEventListener("click", async () => {
-    const ids = selectedIds();
-    if (!ids.length) return toast("先选中要删的条目", true);
-    if (!confirm(`删除这 ${ids.length} 条记忆？删了就找不回来。`)) return;
-    try {
-      const r = await bridge.apiPost("facts/delete", { scope: state.scope, ids });
-      toast(`已删除 ${r.deleted} 条`);
-      await reload();
-    } catch (e) {
-      toast(e.message, true);
-    }
+  $("bulk-clear").addEventListener("click", () => {
+    document.querySelectorAll(".pick").forEach((el) => (el.checked = false));
+    $("check-all").checked = false;
+    syncSelection();
   });
-  $("confirm-selected").addEventListener("click", async () => {
-    const ids = selectedIds();
-    if (!ids.length) return toast("先选中待确认的条目", true);
-    try {
-      const r = await bridge.apiPost("facts/confirm", { scope: state.scope, ids });
-      toast(`已确认 ${r.confirmed} 条`);
-      await reload();
-    } catch (e) {
-      toast(e.message, true);
-    }
-  });
+  $("delete-selected").addEventListener("click", () => act(selectedIds(), "delete"));
+  $("confirm-selected").addEventListener("click", () => act(selectedIds(), "confirm"));
+
   $("export").addEventListener("click", () => {
     bridge
       .download("export", { scope: state.scope }, `memory-${state.scope.replace(/:/g, "_")}.json`)
       .catch((e) => toast(e.message, true));
   });
+
   $("settings-save").addEventListener("click", saveSettings);
+  $("settings-groups").addEventListener("input", updateDirty);
+  $("settings-groups").addEventListener("change", updateDirty);
+  $("settings-filter").addEventListener("input", () => {
+    state.settingsFilter = $("settings-filter").value;
+    renderSettings();
+  });
   $("settings-defaults").addEventListener("click", () => {
     const groups = (state.settings && state.settings.groups) || [];
     groups.forEach((g) => (g.fields || []).forEach((f) => {
@@ -393,21 +556,25 @@ function bind() {
       if (el.type === "checkbox") el.checked = Boolean(f.default);
       else el.value = f.default ?? "";
     }));
+    updateDirty();
     toast("已填入默认值，记得保存");
   });
-  $("care-toggle").addEventListener("click", async () => {
+
+  $("care-toggle-input").addEventListener("change", async () => {
     try {
       const r = await bridge.apiPost("care", {
         scope: state.scope,
-        enabled: !(state.care && state.care.enabled),
+        enabled: $("care-toggle-input").checked,
       });
       state.care = { ...state.care, ...r };
       renderCare();
       toast(r.enabled ? "已开启" : "已关闭");
     } catch (e) {
       toast(e.message, true);
+      $("care-toggle-input").checked = Boolean(state.care && state.care.enabled);
     }
   });
+
   $("tabs").addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
     if (!tab) return;

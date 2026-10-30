@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.4.1-blue)
+![version](https://img.shields.io/badge/version-v0.6.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -11,6 +11,20 @@
 [![tests](https://github.com/1244p/astrbot_plugin_memory_evo/actions/workflows/tests.yml/badge.svg)](https://github.com/1244p/astrbot_plugin_memory_evo/actions/workflows/tests.yml)
 
 **一句话**：把聊天压成结构化事实存进 SQLite，每轮按相关度取几条注入；把性格拆成五个连续维度，每次演化限速、并且持续向基线回归。
+
+---
+
+## 界面
+
+Dashboard → 插件 → 记忆演化，四个页签：记忆、人格、主动消息、设置。
+
+![记忆页](docs/panel-memory.png)
+
+| 人格 | 主动消息 |
+|---|---|
+| ![人格页](docs/panel-persona.png) | ![主动消息页](docs/panel-care.png) |
+
+配色顺着 Dashboard 自己的主题变量走，深色模式自动跟随，不另起一套风格。
 
 ---
 

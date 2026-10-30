@@ -7,100 +7,124 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <header class="bar">
-      <div class="bar-left">
-        <h1>记忆演化</h1>
-        <span class="hint" id="scope-hint">加载中…</span>
-      </div>
-      <div class="bar-right">
-        <select id="scope" title="会话"></select>
-        <button id="refresh" class="btn">刷新</button>
-      </div>
-    </header>
+    <div class="page">
+      <header class="hero">
+        <div>
+          <h1>记忆演化</h1>
+          <p class="sub" id="scope-hint">加载中…</p>
+        </div>
+        <div class="hero-actions">
+          <label class="scope-pill" title="切换会话">
+            <span class="dot"></span>
+            <select id="scope"></select>
+          </label>
+          <button id="export" class="icon-btn" title="导出这个会话的记忆">↓</button>
+          <button id="refresh" class="icon-btn" title="重新读取">↻</button>
+        </div>
+      </header>
 
-    <section class="stats" id="stats"></section>
+      <section class="stat-strip" id="stats"></section>
 
-    <nav class="tabs" id="tabs">
-      <button class="tab active" data-tab="facts">记忆</button>
-      <button class="tab" data-tab="persona">人格</button>
-      <button class="tab" data-tab="care">主动消息</button>
-      <button class="tab" data-tab="settings">设置</button>
-    </nav>
+      <nav class="segmented" id="tabs">
+        <button class="tab active" data-tab="facts">记忆</button>
+        <button class="tab" data-tab="persona">人格</button>
+        <button class="tab" data-tab="care">主动消息</button>
+        <button class="tab" data-tab="settings">设置</button>
+      </nav>
 
-    <section class="panel" id="panel-facts">
-      <div class="toolbar">
-        <input id="q" type="search" placeholder="搜内容，如 香菜 / 作息" />
-        <select id="kind">
-          <option value="">全部类型</option>
-          <option value="preference">偏好</option>
-          <option value="profile">资料</option>
-          <option value="fact">事实</option>
-          <option value="event">事件</option>
-          <option value="task">任务</option>
-        </select>
-        <select id="status">
-          <option value="">全部状态</option>
-          <option value="active">有效</option>
-          <option value="suspect">待确认</option>
-          <option value="superseded">已取代</option>
-        </select>
-        <button id="search" class="btn">搜索</button>
-        <span class="spacer"></span>
-        <button id="confirm-selected" class="btn ghost">确认选中</button>
-        <button id="delete-selected" class="btn danger">删除选中</button>
-        <button id="export" class="btn ghost">导出 JSON</button>
-      </div>
-      <div class="table-wrap">
-        <table id="facts-table">
-          <thead>
-            <tr>
-              <th class="c"><input type="checkbox" id="check-all" /></th>
-              <th class="c">#</th>
-              <th>内容</th>
-              <th class="c">类型</th>
-              <th class="c">重要</th>
-              <th class="c">置信</th>
-              <th class="c">召回</th>
-              <th class="c">状态</th>
-              <th class="c">更新时间</th>
-            </tr>
-          </thead>
-          <tbody id="facts-body"></tbody>
-        </table>
-        <p class="empty" id="facts-empty" hidden>这个会话还没有记忆。</p>
-      </div>
-      <div class="pager">
-        <button id="prev" class="btn ghost">上一页</button>
-        <span id="pager-info" class="hint"></span>
-        <button id="next" class="btn ghost">下一页</button>
-      </div>
-    </section>
+      <section class="panel" id="panel-facts">
+        <div class="toolbar">
+          <div class="search">
+            <span class="ico">⌕</span>
+            <input id="q" type="search" placeholder="搜内容，如 香菜 / 作息" />
+          </div>
+          <div class="chips" id="kind-chips">
+            <button class="chip on" data-kind="">全部</button>
+            <button class="chip" data-kind="preference">偏好</button>
+            <button class="chip" data-kind="profile">资料</button>
+            <button class="chip" data-kind="fact">事实</button>
+            <button class="chip" data-kind="event">事件</button>
+            <button class="chip" data-kind="task">任务</button>
+          </div>
+          <span class="spacer"></span>
+          <div class="chips" id="status-chips">
+            <button class="chip on" data-status="">全部状态</button>
+            <button class="chip" data-status="active">有效</button>
+            <button class="chip" data-status="suspect">待确认</button>
+            <button class="chip" data-status="superseded">已取代</button>
+          </div>
+        </div>
 
-    <section class="panel" id="panel-persona" hidden>
-      <div id="persona-traits" class="traits"></div>
-      <h2 class="sub">演化记录</h2>
-      <ul id="persona-log" class="timeline"></ul>
-    </section>
+        <div class="list-head">
+          <label><input type="checkbox" id="check-all" /></label>
+          <span id="list-count">记忆条目</span>
+          <span class="right">状态</span>
+        </div>
+        <ul class="fact-list" id="facts-list"></ul>
+        <p class="empty" id="facts-empty" hidden>
+          <b>这个会话还没有记忆</b>
+          先聊几句，攒够轮数或空闲一分钟后会自动抽取。
+        </p>
+        <div class="bulkbar" id="bulkbar" hidden>
+          <span id="bulk-count">已选 0 条</span>
+          <button id="confirm-selected" class="btn sm ghost">确认</button>
+          <button id="delete-selected" class="btn sm danger">删除</button>
+          <button id="bulk-clear" class="btn sm quiet">取消</button>
+        </div>
+        <div class="pager">
+          <button id="prev" class="btn ghost sm">上一页</button>
+          <span id="pager-info" class="hint"></span>
+          <button id="next" class="btn ghost sm">下一页</button>
+        </div>
+      </section>
 
-    <section class="panel" id="panel-care" hidden>
-      <div class="care-grid" id="care-grid"></div>
-      <div class="care-actions">
-        <button id="care-toggle" class="btn">切换本会话</button>
-        <p class="hint">总开关在插件配置里（care_enable）。这里只控制这个会话。</p>
-      </div>
-    </section>
+      <section class="panel" id="panel-persona" hidden>
+        <h2 class="sec">当前人格</h2>
+        <div id="persona-traits" class="traits"></div>
+        <h2 class="sec">演化记录</h2>
+        <ul id="persona-log" class="timeline"></ul>
+      </section>
 
-    <section class="panel" id="panel-settings" hidden>
-      <div class="toolbar">
-        <span class="spacer"></span>
-        <button id="settings-defaults" class="btn ghost">填入默认值</button>
-        <button id="settings-save" class="btn">保存设置</button>
-      </div>
-      <p class="hint">这里的改动写回插件配置文件，保存后立即生效；标「需重启」的要重启 AstrBot。</p>
-      <div id="settings-groups"></div>
-    </section>
+      <section class="panel" id="panel-care" hidden>
+        <div class="care-hero" id="care-hero">
+          <span class="mark" id="care-mark">◔</span>
+          <div class="care-hero-main">
+            <div class="care-state" id="care-state">—</div>
+            <div class="care-because" id="care-because"></div>
+          </div>
+        </div>
+        <h2 class="sec">判定闸门</h2>
+        <div class="care-grid" id="care-grid"></div>
+        <div class="care-last" id="care-last" hidden></div>
+        <div class="care-actions">
+          <label class="switch">
+            <input type="checkbox" id="care-toggle-input" />
+            <span class="track"></span>
+            <span id="care-toggle-label">这个会话的主动消息</span>
+          </label>
+          <p class="hint">总开关在插件配置里（care_enable）。这里只切换当前会话。</p>
+        </div>
+      </section>
 
-    <p class="toast" id="toast" hidden></p>
+      <section class="panel" id="panel-settings" hidden>
+        <div class="toolbar">
+          <div class="search">
+            <span class="ico">⌕</span>
+            <input id="settings-filter" type="search" placeholder="找配置项，如 空闲 / 阈值" />
+          </div>
+          <p class="hint">改动写回插件配置文件，保存后立即生效；标「需重启」的要重启 AstrBot。</p>
+        </div>
+        <div id="settings-groups"></div>
+        <div class="set-savebar">
+          <span class="dirty" id="settings-dirty">没有改动</span>
+          <span class="spacer"></span>
+          <button id="settings-defaults" class="btn ghost sm">填入默认值</button>
+          <button id="settings-save" class="btn sm">保存设置</button>
+        </div>
+      </section>
+
+      <p class="toast" id="toast" hidden></p>
+    </div>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

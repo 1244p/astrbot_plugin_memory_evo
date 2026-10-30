@@ -618,6 +618,7 @@ class MemoryEvoPlugin(Star):
             "quiet_start": str(self._get("care_quiet_start", "23:30")),
             "quiet_end": str(self._get("care_quiet_end", "08:00")),
             "probability": float(self._get("care_probability", 0.85)),
+            "max_chars": int(self._get("care_max_chars", 45)),
             "schedule": str(self._get("care_schedule", "") or ""),
         }
 
