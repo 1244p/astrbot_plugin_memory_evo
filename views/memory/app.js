@@ -285,7 +285,10 @@ function renderCare() {
   $("care-mark").textContent = cls === "ready" ? "✓" : "…";
   $("care-state").textContent = title;
   const basis = REASON_TEXT[c.next_reason] || "空闲与间隔都满足";
-  $("care-because").textContent = `${basis} · 下次最早 ${nextText(c)}`;
+  const checked = c.checked_at
+    ? `上次检查 ${when(c.checked_at)} → ${c.check_text || c.check_reason || "—"}`
+    : "后台还没检查过（心跳没起来？）";
+  $("care-because").textContent = `${basis} · 下次最早 ${nextText(c)} · ${checked}`;
 
   // 后端没给的项直接不渲染，避免出现一排「— 字」这种半截话
   const gates = [];

@@ -212,3 +212,27 @@ def sanitize_reply(raw: dict, max_chars: int = 60) -> tuple[str | None, int, str
 
 def next_check_time(gap_minutes: int) -> datetime:
     return local_now() + timedelta(minutes=max(1, int(gap_minutes)))
+
+
+# 判定原因的中文说法：日志、面板、`/memory care why` 共用一份，避免三处各写一遍
+REASON_TEXT = {
+    "disabled": "总开关关着",
+    "muted": "这个会话被关掉了",
+    "not_private": "不是私聊会话",
+    "quiet_hours": "在免打扰时段",
+    "outside_schedule": "不在允许时段",
+    "too_soon": "距离上次发言还不够久",
+    "daily_cap": "今天已经发够了",
+    "unanswered_cap": "连发几条都没回，先停",
+    "probability": "这轮概率没抽中",
+    "forced": "手动触发",
+    "send_failed": "找不到这个会话的平台实例",
+    "no_text": "模型选择这轮不说",
+    "timeout": "模型调用超时",
+    "error": "模型调用出错",
+    "ok": "可以发",
+}
+
+
+def reason_text(reason: str) -> str:
+    return REASON_TEXT.get(reason, reason or "没检查过")

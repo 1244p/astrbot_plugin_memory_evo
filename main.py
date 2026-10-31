@@ -34,7 +34,7 @@ HELP_TEXT = (
     "/memory why <词> 看召回打分\n"
     "/memory confirm <id> 确认一条待确认记忆\n"
     "/memory reindex 补写缺失语义向量\n"
-    "/memory care 主动消息 on|off|status|now\n"
+    "/memory care 主动消息 on|off|status|why|now\n"
     "/memory forget <id|词|all> 删除\n"
     "/memory persona 查看人格状态与演化记录"
 )
@@ -54,8 +54,14 @@ class MemoryEvoPlugin(Star):
         self.buffers: dict[str, deque[tuple[str, str, float]]] = {}
         self.inflight: set[str] = set()
         self._scopes: set[str] = set()
+        try:
+            # 上电时把库里已有的会话补进来，否则重启后要等用户先说话才会主动开口
+            self._scopes.update(self.store.known_scopes())
+        except Exception:  # pragma: no cover - 老库缺表时不该影响启动
+            logger.debug("[memory_evo] 恢复已有会话列表失败", exc_info=True)
         self._warned: set[str] = set()
         self._ticks = 0
+        self._care_seen: dict[str, dict] = {}
         self._emb_resolved = False
         self._emb_provider = None
         self._emb_model = ""
@@ -195,9 +201,52 @@ class MemoryEvoPlugin(Star):
         data["settings"] = self._care_cfg()
         return json_response(data)
 
+    async def _care_why(self, scope: str) -> str:
+        """把「现在能不能发、卡在哪」一次说清，不用去翻 DEBUG 日志。"""
+        cfg = self._care_cfg()
+        tz_name = str(self._get("care_timezone", proactive.DEFAULT_TZ))
+        now = proactive.local_now(tz_name)
+        state = await asyncio.to_thread(self.store.get_care_state, scope)
+        ok, reason = proactive.decide(now, state, cfg)
+        seen = self._care_seen.get(scope) or {}
+        idle = (time.time() - float(state["last_active"])) / 60 if state["last_active"] else -1
+        gap = (time.time() - float(state["last_sent"])) / 60 if state["last_sent"] else -1
+        buf = self.buffers.get(scope)
+        provider_id = str(self._get("extract_provider_id", "") or "") or "（跟随当前会话模型）"
+        lines = [
+            f"现在 {now.strftime('%m-%d %H:%M')}（{tz_name}）",
+            f"结论：{'能发' if ok else '现在不能发'} —— {proactive.reason_text(reason)}",
+            f"总开关 {self._yn(bool(cfg['enabled']))}｜本会话 {self._yn(bool(state.get('enabled', 1)))}",
+            f"空闲 {'还没记录' if idle < 0 else str(int(idle)) + ' 分钟'} / 要求 {int(cfg['min_idle_minutes'])} 分钟",
+            f"距上次主动 {('还没发过' if gap < 0 else str(int(gap)) + ' 分钟')}"
+            f" / 模型给的间隔 {state['next_gap_minutes']} 分钟",
+            f"今日已发 {state['sent_today']}/{cfg['daily_max']}｜连续未回应 {state['unanswered']}/{cfg['max_unanswered']}",
+            f"免打扰 {cfg['quiet_start']}-{cfg['quiet_end']}｜允许时段 {cfg['schedule'] or '不限'}",
+        ]
+        if seen:
+            waited = int((time.time() - float(seen.get('at') or 0)) / 60)
+            lines.append(
+                f"上次自动检查：{waited} 分钟前 → {proactive.reason_text(str(seen.get('reason') or ''))}"
+            )
+        else:
+            lines.append("上次自动检查：还没跑过（后台心跳可能没起来，看日志有没有 janitor）")
+        lines.append(f"抽取缓冲：{len(buf) if buf else 0} 轮｜抽取模型 {provider_id}")
+        return chr(10).join(lines)
+
+    @staticmethod
+    def _yn(flag: bool) -> str:
+        return "开" if flag else "关"
+
     def _care_block(self, scope: str) -> dict:
+        seen = self._care_seen.get(scope) or {}
+        reason = str(seen.get("reason") or "")
         return dashboard.care_block(
-            self.store.conn, scope, float(self._get("care_min_idle_minutes", 90))
+            self.store.conn,
+            scope,
+            float(self._get("care_min_idle_minutes", 90)),
+            checked_at=float(seen.get("at") or 0.0),
+            check_reason=reason,
+            check_text=proactive.reason_text(reason),
         )
 
     async def api_settings(self):
@@ -301,29 +350,41 @@ class MemoryEvoPlugin(Star):
         )
 
     async def _janitor_loop(self) -> None:
-        """空闲补写：对话停下来的 60s 后把缓冲落盘，避免只在轮数达标时才记忆。"""
-        try:
-            while True:
+        """后台心跳：空闲补写 + 向量补齐 + 主动消息检查。
+
+        每轮都单独兜异常：这个循环一旦退出就再也没有人把它拉起来（AstrBot 不会重试
+        插件里的 create_task），表现是「记忆停在昨天、主动消息再也不发」，而且日志里
+        只有一行 exception，很容易被后面的刷屏淹掉。宁可能一轮坏掉，不能让循环死掉。
+        """
+        while True:
+            try:
                 await asyncio.sleep(20)
-                idle = float(self._get("idle_seconds", 60))
-                now = time.time()
-                for scope, buf in list(self.buffers.items()):
-                    if not buf:
-                        continue
-                    if now - buf[-1][2] >= idle:
-                        await self._flush(scope, reason="idle")
-                for scope in list(self._scopes):
-                    try:
-                        await self._backfill_embeddings(scope, limit=16)
-                    except Exception:
-                        logger.debug("[memory_evo] 向量补写失败 scope=%s", scope, exc_info=True)
-                self._ticks += 1
-                if self._ticks % 3 == 0:
-                    await self._care_tick()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("[memory_evo] janitor 异常退出")
+                await self._janitor_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("[memory_evo] janitor 本轮出错，已跳过继续下一轮")
+                await asyncio.sleep(5)
+
+    async def _janitor_tick(self) -> None:
+        idle = float(self._get("idle_seconds", 60))
+        now = time.time()
+        for scope, buf in list(self.buffers.items()):
+            if not buf:
+                continue
+            if now - buf[-1][2] >= idle:
+                try:
+                    await self._flush(scope, reason="idle")
+                except Exception:
+                    logger.exception("[memory_evo] 空闲落盘失败 scope=%s", scope)
+        for scope in list(self._scopes):
+            try:
+                await self._backfill_embeddings(scope, limit=16)
+            except Exception:
+                logger.debug("[memory_evo] 向量补写失败 scope=%s", scope, exc_info=True)
+        self._ticks += 1
+        if self._ticks % 3 == 0:
+            await self._care_tick()
 
     async def _provider(self, umo: str, provider_id: str | None = None):
         if provider_id is None:
@@ -628,15 +689,20 @@ class MemoryEvoPlugin(Star):
         return len(parts) >= 2 and parts[1] == MessageType.FRIEND_MESSAGE.value
 
     async def _care_tick(self) -> None:
-        if not self._get("care_enable", False):
-            return
+        """每 60s 过一遍会话，把「为什么没发」记在内存里，面板和 why 命令直接读。"""
+        enabled = bool(self._get("care_enable", False))
         for scope in list(self._scopes):
             if not self._is_friend_scope(scope):
                 continue
+            if not enabled:
+                self._care_seen[scope] = {"at": time.time(), "reason": "disabled", "sent": False}
+                continue
             try:
-                await self._maybe_care(scope)
+                sent, reason = await self._maybe_care(scope)
             except Exception:
                 logger.exception(f"[memory_evo] 主动消息检查失败 scope={scope}")
+                sent, reason = False, "error"
+            self._care_seen[scope] = {"at": time.time(), "reason": reason, "sent": bool(sent)}
 
     async def _maybe_care(self, scope: str, force: bool = False) -> tuple[bool, str]:
         """检查并（可能）主动发一条。返回 (是否已发送, 原因)。"""
@@ -825,6 +891,9 @@ class MemoryEvoPlugin(Star):
             if arg == "now":
                 sent, reason = await self._maybe_care(scope, force=True)
                 yield event.plain_result("已发出一条。" if sent else f"没发：{reason}")
+                return
+            if arg == "why":
+                yield event.plain_result(await self._care_why(scope))
                 return
             state = await asyncio.to_thread(self.store.get_care_state, scope)
             cfg = self._care_cfg()

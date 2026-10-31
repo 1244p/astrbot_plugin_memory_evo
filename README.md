@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.6.1-blue)
+![version](https://img.shields.io/badge/version-v0.6.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -295,6 +295,7 @@ flowchart LR
 
 ```
 /memory care status   # 当前状态、今日已发、未回应计数
+/memory care why      # 现在为什么还不能发：逐条列出闸门与上次检查结论
 /memory care off      # 只静音这个会话
 /memory care on       # 恢复
 /memory care now      # 立刻试发一条（跳过空闲/冷却/上限，仍守免打扰）
@@ -344,7 +345,7 @@ care_schedule        = 09:00-12:00,19:00-23:00  → 只在这两段说
 | `/memory why <词>` | 查看召回打分，调 `top_k` 时必备 |
 | `/memory confirm <id>` | 确认一条待确认记忆，冲突的另一条自动归档 |
 | `/memory reindex` | 手动补写缺失的语义向量 |
-| `/memory care [on/off/status/now]` | 主动开口的开关、状态与立即试发 |
+| `/memory care [on/off/status/why/now]` | 主动开口的开关、状态、卡在哪、立即试发 |
 | `/memory forget <id\|词\|all>` | 删除记忆 |
 | `/memory persona` | 五维当前值 + 最近 5 次演化及理由 |
 

@@ -114,6 +114,9 @@ def fixture_care() -> dict:
         "ready": True,
         "last_text": "睡前别喝咖啡了，你两点才睡的话明天又要熬。",
         "last_sent_at": 1761699000,
+        "checked_at": 1761699530,
+        "check_reason": "probability",
+        "check_text": "这轮概率没抽中",
         "settings": {
             "enabled": True,
             "daily_max": 3,

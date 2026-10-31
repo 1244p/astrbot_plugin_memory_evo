@@ -546,6 +546,17 @@ class MemoryStore:
         )
         self.conn.commit()
 
+    def known_scopes(self) -> list[str]:
+        """库里出现过的会话：事实表 ∪ 主动消息表。
+
+        主动消息的 tick 只遍历内存里的 _scopes，进程重启后如果没人说话就永远是空集合，
+        表现就是「重启之后再也不主动开口」。上电时用它把集合补回来。
+        """
+        rows = self.conn.execute(
+            "SELECT scope FROM facts UNION SELECT scope FROM proactive"
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
     def get_care_state(self, scope: str) -> dict:
         row = self.conn.execute(
             "SELECT * FROM proactive WHERE scope=?", (scope,)

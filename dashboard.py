@@ -250,7 +250,12 @@ def persona_block(conn: sqlite3.Connection, scope: str, baseline: dict[str, floa
 
 
 def care_block(
-    conn: sqlite3.Connection, scope: str, min_idle_minutes: float = 90.0
+    conn: sqlite3.Connection,
+    scope: str,
+    min_idle_minutes: float = 90.0,
+    checked_at: float = 0.0,
+    check_reason: str = "",
+    check_text: str = "",
 ) -> dict:
     """主动消息状态。next_at = 两道闸门里更晚的那个时刻（epoch 秒）。"""
     row = conn.execute("SELECT * FROM proactive WHERE scope = ?", (scope,)).fetchone()
@@ -289,6 +294,9 @@ def care_block(
             "next_reason": reason,
             "ready": not next_at or next_at <= now,
             "min_idle_minutes": float(min_idle_minutes),
+            "checked_at": float(checked_at or 0.0),
+            "check_reason": check_reason,
+            "check_text": check_text,
         }
     )
     return base
