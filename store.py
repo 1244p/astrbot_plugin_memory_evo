@@ -219,6 +219,16 @@ class MemoryStore:
 
     # ---------------- facts ----------------
 
+    def known_facts(self, scope: str, limit: int = 8) -> list[dict]:
+        """当前有效记忆的摘要，喂给抽取提示词，让模型能输出「同 predicate 的新值」。"""
+        cur = self.conn.execute(
+            "SELECT predicate, object, kind FROM facts"
+            " WHERE scope=? AND superseded_by IS NULL AND status='active'"
+            " ORDER BY importance DESC, updated_at DESC LIMIT ?",
+            (scope, max(1, int(limit))),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
     def upsert_fact(
         self,
         scope: str,

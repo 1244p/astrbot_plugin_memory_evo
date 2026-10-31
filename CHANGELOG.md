@@ -16,6 +16,22 @@
 
 已经发出去的 tag 不回收——有人可能 pin 了版本、`CHANGELOG` 里也引用了它们，改写历史只会让后来者对不上账。
 
+## [v0.7.2] - 2026-10-31
+
+### Fixed
+
+- **抽取一直是 0 条却没有线索**：新增 `flush.nofacts` 事件（INFO），写明这轮为什么没东西可存——模型返回空数组、`object` 为空、`facts` 不是数组，并带上模型原文前 160 字；`llm.nojson`（WARN）单独记“返回的不是 JSON”。
+- **旧记忆永远不被覆盖**：抽取提示词里新增「已经记住的内容」（当前 8 条有效记忆），并明确要求「状态变了就用**同一个 predicate** 输出新值」。此前模型看不到旧记录，只能另起一个谓词，于是“在修 bug”永远不会被“修好了”取代。
+
+### Added
+
+- `store.known_facts(scope, limit=8)`：给提示词用的有效记忆摘要。
+- `extractor.sanitize_facts(raw, max_facts, dropped=None)`：可选回填丢弃原因，供日志与测试使用。
+
+### Tests
+
+- 169 用例：新增 `flush.nofacts` 与「提示词带上已有记忆」两条断言。
+
 ## [Unreleased]
 
 ### Planned

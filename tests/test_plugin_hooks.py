@@ -240,6 +240,34 @@ class HookTest(unittest.TestCase):
         self.assertEqual(rows[0]["object"], "只吃素")
         self.assertGreaterEqual(self.plugin.store.get_persona("s1", self.plugin.baseline)["version"], 1)
 
+    def test_flush_logs_nofacts_when_model_returns_empty(self):
+        self.plugin.context.provider = FakeProvider('{"facts":[]}')
+        from collections import deque
+
+        self.plugin.buffers["s2"] = deque([("user", "今天天气不错", 0.0)])
+        asyncio.run(self.plugin._flush("s2"))
+        recs = self.plugin.plog.tail(20, evt="flush.nofacts")
+        self.assertTrue(recs, "零产出必须留下可见记录")
+        self.assertIn("模型返回空数组", str(recs[0]["f"].get("dropped")))
+
+    def test_flush_prompt_carries_known_facts(self):
+        self.plugin.store.upsert_fact("s3", "用户", "正在处理的任务", "在修 bug", kind="task")
+        prompts = []
+
+        class SpyProvider:
+            async def text_chat(self, prompt=None, system_prompt=None, **kw):
+                prompts.append(prompt or "")
+                return provider_stub.LLMResponse(completion_text='{"facts":[]}')
+
+        self.plugin.context.provider = SpyProvider()
+        from collections import deque
+
+        self.plugin.buffers["s3"] = deque([("user", "bug 修好了", 0.0)])
+        asyncio.run(self.plugin._flush("s3"))
+        fact_prompt = prompts[0]  # 第二次调用是人格评估，不是抽取
+        self.assertIn("已经记住的内容", fact_prompt)
+        self.assertIn("在修 bug", fact_prompt)
+
     def test_search_tool_returns_scoped_facts(self):
         self.plugin.store.upsert_fact("aiocqhttp:FriendMessage:1", "用户", "宠物", "养了两只猫")
         out = asyncio.run(self.plugin.tool_search(FakeEvent(text="猫"), "宠物", 5))

@@ -590,10 +590,17 @@ class MemoryEvoPlugin(Star):
     async def _ask(
         self, umo: str, system: str, prompt: str, provider_id: str | None = None
     ) -> dict:
+        data, _ = await self._ask_with_text(umo, system, prompt, provider_id)
+        return data
+
+    async def _ask_with_text(
+        self, umo: str, system: str, prompt: str, provider_id: str | None = None
+    ) -> tuple[dict, str]:
+        """同 _ask，但把模型原文一起返回——排查「解析不到 JSON」时要用。"""
         provider = await self._provider(umo, provider_id)
         if not provider:
             logger.debug("[memory_evo] 没有可用 provider，跳过本次抽取")
-            return {}
+            return {}, ""
         timeout = float(self._get("llm_timeout", 45))
         started = time.time()
         try:
@@ -609,16 +616,27 @@ class MemoryEvoPlugin(Star):
             raise
         text = getattr(resp, "completion_text", "") or ""
         data = extractor.parse_json(text)
-        self._log(
-            "DEBUG",
-            "llm.ok",
-            "",
-            umo=umo,
-            ms=int((time.time() - started) * 1000),
-            chars=len(text),
-            parsed=bool(data),
-        )
-        return data
+        if not data:
+            self._log(
+                "WARN",
+                "llm.nojson",
+                "模型没有返回可解析的 JSON",
+                umo=umo,
+                ms=int((time.time() - started) * 1000),
+                chars=len(text),
+                head=text[:160] or None,
+            )
+        else:
+            self._log(
+                "DEBUG",
+                "llm.ok",
+                "",
+                umo=umo,
+                ms=int((time.time() - started) * 1000),
+                chars=len(text),
+                keys=sorted(data.keys())[:6],
+            )
+        return data, text
 
     # ---------------- 读：每轮注入 ----------------
 
@@ -726,13 +744,33 @@ class MemoryEvoPlugin(Star):
                 self._log("DEBUG", "flush.empty", "取到空对话，跳过", scope=scope)
                 return
 
-            data = await self._ask(
-                scope,
-                extractor.FACT_SYSTEM,
-                extractor.FACT_PROMPT.replace("__TRANSCRIPT__", transcript),
+            known = await asyncio.to_thread(self.store.known_facts, scope, 8)
+            known_text = (
+                chr(10).join(f"  - {k['predicate']}：{k['object']}" for k in known)
+                if known
+                else "  （还没有任何记录）"
             )
+            prompt = extractor.FACT_PROMPT.replace("__TRANSCRIPT__", transcript).replace(
+                "__KNOWN__", known_text
+            )
+            data, raw_text = await self._ask_with_text(scope, extractor.FACT_SYSTEM, prompt)
+            dropped: list[str] = []
+            facts = extractor.sanitize_facts(data, dropped=dropped)
+            if not facts:
+                self._log(
+                    "INFO",
+                    "flush.nofacts",
+                    "这轮没抽出可存的事实",
+                    scope=scope,
+                    reason=reason,
+                    turns=len(items),
+                    known=len(known),
+                    parsed=bool(data),
+                    dropped=dropped[:3] or None,
+                    head=(raw_text or "")[:160] or None,
+                )
             pending_embeddings: list[tuple[int, str]] = []
-            for fact in extractor.sanitize_facts(data):
+            for fact in facts:
                 fact_id, action = await asyncio.to_thread(
                     self.store.upsert_fact,
                     scope,
