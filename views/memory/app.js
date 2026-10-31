@@ -181,11 +181,56 @@ function syncSelection() {
   const bar = $("bulkbar");
   bar.hidden = ids.length === 0;
   $("bulk-count").textContent = `已选 ${ids.length} 条`;
+  // 选择变了就撤销「再点一次确认」的待删状态，避免确认到别的条目
+  if (pendingDelete.ids.length && !sameIds(pendingDelete.ids, ids)) {
+    clearTimeout(pendingDelete.timer);
+    pendingDelete = { ids: [], timer: 0 };
+    paintDeleteArm([]);
+  }
+}
+
+/* 删除要二次确认，但不能用 confirm()：插件视图在 sandbox="allow-scripts allow-forms
+   allow-downloads" 的 iframe 里，没有 allow-modals，confirm() 会被浏览器直接忽略并返回
+   false —— 于是点删除看起来「没反应」。改成页面内两段式：第一次点变成「再点一次确认」，
+   6 秒内再点才真删。 */
+let pendingDelete = { ids: [], timer: 0 };
+
+function sameIds(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+function paintDeleteArm(ids) {
+  const armed = ids.length > 0;
+  const bulk = $("delete-selected");
+  if (bulk) bulk.textContent = armed ? `确认删除 ${ids.length} 条` : "删除";
+  document.querySelectorAll('[data-act="delete"]').forEach((btn) => {
+    const id = Number(btn.dataset.id);
+    btn.textContent = armed && ids.includes(id) ? "确认" : "删";
+  });
+}
+
+function armDelete(ids) {
+  clearTimeout(pendingDelete.timer);
+  pendingDelete = {
+    ids,
+    timer: setTimeout(() => {
+      pendingDelete = { ids: [], timer: 0 };
+      paintDeleteArm([]);
+    }, 6000),
+  };
+  paintDeleteArm(ids);
+  toast(`再点一次确认删除这 ${ids.length} 条`);
 }
 
 async function act(ids, kind) {
   if (!ids.length) return;
-  if (kind === "delete" && !confirm(`删除这 ${ids.length} 条记忆？删了就找不回来。`)) return;
+  if (kind === "delete" && !sameIds(pendingDelete.ids, ids)) {
+    armDelete(ids);
+    return;
+  }
+  clearTimeout(pendingDelete.timer);
+  pendingDelete = { ids: [], timer: 0 };
+  paintDeleteArm([]);
   try {
     const r = await bridge.apiPost(`facts/${kind}`, { scope: state.scope, ids });
     if (kind === "delete") toast(`已删除 ${r.deleted} 条`);

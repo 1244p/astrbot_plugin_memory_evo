@@ -390,6 +390,19 @@ class ViewsTest(unittest.TestCase):
         for name in ("index.html", "app.js", "style.css"):
             self.assertTrue(os.path.isfile(os.path.join(root, name)), name)
 
+    def test_view_avoids_blocked_dialogs(self):
+        """插件视图在 sandbox 里没有 allow-modals，confirm/alert/prompt 会被静默忽略。"""
+        path = os.path.join(PLUGIN_DIR, "views", "memory", "app.js")
+        with open(path, encoding="utf-8") as fp:
+            body = fp.read()
+        code = "\n".join(
+            line
+            for line in body.splitlines()
+            if not line.lstrip().startswith(("//", "*", "/*"))
+        )
+        for call in ("window.confirm(", "confirm(`", "alert(", "prompt("):
+            self.assertNotIn(call, code, f"{call} 在受限 iframe 里不会生效")
+
 
 class LogIntegrationTest(unittest.TestCase):
     """v0.7.0：插件自己的事件日志确实被写上，而不是只存在模块里。"""
