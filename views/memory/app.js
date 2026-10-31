@@ -11,6 +11,8 @@ const state = {
   persona: null,
   settings: null,
   settingsFilter: "",
+  settingsDraft: {},
+  settingsBase: null,
   logs: { level: "", q: "", items: [], stats: null },
   snapshot: {},
 };
@@ -368,25 +370,126 @@ function renderCare() {
 
 /* ---------------- 设置 ---------------- */
 
-function fieldInput(f) {
-  const id = `set-${f.key}`;
-  const common = `id="${id}" data-key="${esc(f.key)}"`;
+const UNIT = {
+  flush_turns: "轮",
+  idle_seconds: "秒",
+  max_buffer: "条",
+  llm_timeout: "秒",
+  top_k: "条",
+  max_inject_chars: "字",
+  max_item_chars: "字",
+  persona_max_chars: "字",
+  embedding_timeout: "秒",
+  care_min_idle_minutes: "分钟",
+  care_daily_max: "次/天",
+  care_max_unanswered: "条",
+  care_max_chars: "字",
+  log_days: "天",
+};
+
+function isRatio(f) {
+  return f.type === "float" && f.min === 0 && f.max === 1;
+}
+
+function draftOf(f) {
+  return state.settingsDraft[f.key] !== undefined ? state.settingsDraft[f.key] : f.value;
+}
+
+function fieldControl(f) {
+  const id = "set-" + f.key;
+  const common = 'id="' + id + '" data-key="' + esc(f.key) + '"';
+  const value = draftOf(f);
+
   if (f.type === "bool") {
-    return `<input type="checkbox" ${common} ${f.value ? "checked" : ""} />`;
+    const on = Boolean(value);
+    return (
+      '<label class="switch">' +
+      "<input type=\"checkbox\" " + common + (on ? " checked" : "") + " />" +
+      '<span class="track"></span>' +
+      '<span class="switch-text" data-switch-text>' + (on ? "开启" : "关闭") + "</span>" +
+      "</label>"
+    );
   }
+
+  if (isRatio(f)) {
+    const v = value === undefined || value === null || value === "" ? f.default : value;
+    return (
+      '<div class="ratio">' +
+      '<input type="range" ' + common + ' min="0" max="1" step="0.01" value="' + esc(v) + '" />' +
+      '<output data-ratio-out>' + esc(Number(v).toFixed(2)) + "</output>" +
+      "</div>"
+    );
+  }
+
   if (f.type === "int" || f.type === "float") {
     const step = f.type === "int" ? "1" : "0.01";
-    const min = f.min !== undefined ? `min="${f.min}"` : "";
-    const max = f.max !== undefined ? `max="${f.max}"` : "";
-    return `<input type="number" ${common} step="${step}" ${min} ${max} value="${esc(f.value ?? "")}" />`;
+    const min = f.min !== undefined ? ' min="' + f.min + '"' : "";
+    const max = f.max !== undefined ? ' max="' + f.max + '"' : "";
+    const unit = UNIT[f.key] ? '<span class="unit">' + UNIT[f.key] + "</span>" : "";
+    return (
+      '<div class="num">' +
+      '<input type="number" ' + common + ' step="' + step + '"' + min + max +
+      ' value="' + esc(value ?? "") + '" />' + unit +
+      "</div>"
+    );
   }
-  return `<input type="text" ${common} value="${esc(f.value ?? "")}" />`;
+
+  return '<input type="text" ' + common + ' value="' + esc(value ?? "") + '" />';
+}
+
+function markMatch(text, needle) {
+  const s = String(text ?? "");
+  if (!needle) return esc(s);
+  const at = s.toLowerCase().indexOf(needle);
+  if (at < 0) return esc(s);
+  return (
+    esc(s.slice(0, at)) +
+    "<mark>" + esc(s.slice(at, at + needle.length)) + "</mark>" +
+    esc(s.slice(at + needle.length))
+  );
+}
+
+function renderSettingsNav(groups) {
+  $("settings-nav").innerHTML = groups
+    .map(
+      (g) =>
+        '<button class="set-nav-item" data-goto="' + esc(g.id) + '">' +
+        esc(g.title) + '<span class="n">' + g.fields.length + "</span></button>"
+    )
+    .join("");
+}
+
+function fieldHtml(f, needle) {
+  const control = fieldControl(f);
+  const label = '<label for="set-' + esc(f.key) + '">' + markMatch(f.label, needle) +
+    (f.restart ? '<span class="badge">需重启</span>' : "") + "</label>";
+  const hint = f.hint ? '<p class="hint">' + markMatch(f.hint, needle) + "</p>" : "";
+  const error = '<p class="field-error" data-error="' + esc(f.key) + '" hidden></p>';
+
+  if (f.type === "bool") {
+    return (
+      '<div class="set-field is-bool" data-field="' + esc(f.key) + '">' +
+      label +
+      hint +
+      '<span class="switch-slot">' + control + "</span>" +
+      error +
+      "</div>"
+    );
+  }
+  return (
+    '<div class="set-field" data-field="' + esc(f.key) + '">' +
+    '<div class="field-top">' + label + "</div>" +
+    '<div class="field-ctl">' + control + "</div>" +
+    hint +
+    error +
+    "</div>"
+  );
 }
 
 function renderSettings() {
   const data = state.settings;
   if (!data) {
-    $("settings-groups").innerHTML = `<p class="empty">设置加载失败，刷新试试。</p>`;
+    $("settings-groups").innerHTML = '<p class="empty">设置加载失败，刷新试试。</p>';
     return;
   }
   const needle = state.settingsFilter.trim().toLowerCase();
@@ -398,34 +501,33 @@ function renderSettings() {
     .map((g) => ({ ...g, fields: (g.fields || []).filter(match) }))
     .filter((g) => g.fields.length);
 
+  renderSettingsNav(groups);
+
   if (!groups.length) {
-    $("settings-groups").innerHTML = `<p class="empty">没有匹配「${esc(needle)}」的配置项。</p>`;
+    $("settings-groups").innerHTML = '<p class="empty">没有匹配「' + esc(needle) + "」的配置项。</p>";
     return;
   }
 
   $("settings-groups").innerHTML = groups
-    .map((g) => `
-      <section class="set-group">
-        <h2 class="sec">${esc(g.title)}<span class="hint">${g.fields.length} 项</span></h2>
-        <div class="set-fields">
-          ${g.fields.map((f) => `
-            <div class="set-field${f.type === "bool" ? " is-bool" : ""}" data-field="${esc(f.key)}">
-              <div class="field-head">
-                <label for="set-${esc(f.key)}">
-                  ${esc(f.label)}
-                  ${f.restart ? `<span class="badge">需重启</span>` : ""}
-                </label>
-                ${f.type === "bool" ? fieldInput(f) : ""}
-              </div>
-              ${f.type === "bool" ? "" : fieldInput(f)}
-              ${f.hint ? `<p class="hint">${esc(f.hint)}</p>` : ""}
-              <p class="field-error" data-error="${esc(f.key)}" hidden></p>
-            </div>`).join("")}
-        </div>
-      </section>`)
+    .map(
+      (g) =>
+        '<section class="set-group" data-group="' + esc(g.id) + '">' +
+        '<header class="set-group-head">' +
+        '<div class="set-group-title">' +
+        "<h2>" + esc(g.title) + "</h2>" +
+        '<span class="count">' + g.fields.length + " 项</span>" +
+        "</div>" +
+        (g.desc ? '<p class="set-group-desc">' + markMatch(g.desc, needle) + "</p>" : "") +
+        "</header>" +
+        '<div class="set-fields">' +
+        g.fields.map((f) => fieldHtml(f, needle)).join("") +
+        "</div>" +
+        "</section>"
+    )
     .join("");
-  state.snapshot = readSettingsForm();
-  updateDirty();
+
+  if (!state.settingsBase) state.settingsBase = readSettingsForm();
+  paintSettingsDirty();
 }
 
 function readSettingsForm() {
@@ -436,18 +538,63 @@ function readSettingsForm() {
   return values;
 }
 
-function updateDirty() {
-  const now = readSettingsForm();
-  const changed = Object.keys(now).filter((k) => {
-    const before = state.snapshot[k];
-    if (before === undefined) return false;
-    if (typeof now[k] === "boolean" || typeof before === "boolean") return Boolean(now[k]) !== Boolean(before);
-    return String(now[k]) !== String(before);
+function currentValues() {
+  const values = {};
+  document.querySelectorAll("#settings-groups [data-key]").forEach((el) => {
+    values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value;
   });
-  const el = $("settings-dirty");
-  el.classList.toggle("on", changed.length > 0);
-  el.textContent = changed.length ? `已改 ${changed.length} 项，待保存` : "没有改动";
+  return values;
+}
+
+function changedKeys() {
+  const now = currentValues();
+  const base = state.settingsBase || {};
+  return Object.keys(now).filter((key) => {
+    if (!(key in base)) return false;
+    const a = now[key];
+    const b = base[key];
+    if (typeof a === "boolean" || typeof b === "boolean") return Boolean(a) !== Boolean(b);
+    return String(a) !== String(b);
+  });
+}
+
+function paintSettingsDirty() {
+  const changed = changedKeys();
+  document.querySelectorAll("#settings-groups .set-field").forEach((el) => {
+    el.classList.toggle("is-dirty", changed.includes(el.dataset.field));
+  });
+  const label = $("settings-dirty");
+  label.classList.toggle("on", changed.length > 0);
+  label.textContent = changed.length ? "已改 " + changed.length + " 项，待保存" : "没有改动";
+  $("settings-save").disabled = changed.length === 0;
+  $("settings-undo").disabled = changed.length === 0;
   return changed;
+}
+
+function updateDirty() {
+  const now = currentValues();
+  state.settingsDraft = { ...now };
+  return paintSettingsDirty();
+}
+
+function onSettingsInput(event) {
+  const el = event.target;
+  if (el && el.dataset && el.dataset.key) {
+    if (el.type === "checkbox") {
+      const text = el.parentElement.querySelector("[data-switch-text]");
+      if (text) text.textContent = el.checked ? "开启" : "关闭";
+    } else if (el.type === "range") {
+      const out = el.parentElement.querySelector("[data-ratio-out]");
+      if (out) out.textContent = Number(el.value).toFixed(2);
+    }
+  }
+  updateDirty();
+}
+
+function undoSettings() {
+  state.settingsDraft = {};
+  renderSettings();
+  toast("已撤销未保存的改动");
 }
 
 function clearFieldErrors() {
@@ -460,37 +607,51 @@ function clearFieldErrors() {
 
 async function saveSettings() {
   clearFieldErrors();
+  const changed = changedKeys();
+  if (!changed.length) {
+    toast("没有改动");
+    return;
+  }
+  const all = currentValues();
+  const payload = {};
+  changed.forEach((key) => {
+    payload[key] = all[key];
+  });
+
   $("settings-save").disabled = true;
   try {
-    const r = await bridge.apiPost("settings", { values: readSettingsForm() });
+    const r = await bridge.apiPost("settings", { values: payload });
     if (r && r.ok === false) {
       const errors = r.errors || {};
       Object.entries(errors).forEach(([key, msg]) => {
-        const holder = document.querySelector(`.set-field[data-field="${key}"]`);
-        const el = document.querySelector(`[data-error="${key}"]`);
+        const holder = document.querySelector('.set-field[data-field="' + key + '"]');
+        const el = document.querySelector('[data-error="' + key + '"]');
         if (holder) holder.classList.add("has-error");
         if (el) {
           el.textContent = msg;
           el.hidden = false;
         }
       });
-      toast(`有 ${Object.keys(errors).length} 项没通过校验`, true);
+      toast("有 " + Object.keys(errors).length + " 项没通过校验", true);
       return;
     }
     state.settings = r;
+    state.settingsDraft = {};
+    state.settingsBase = null;
     renderSettings();
-    const changed = r.changed || [];
-    if (!changed.length) {
+    const saved = r.changed || [];
+    if (!saved.length) {
       toast("没有改动");
     } else if ((r.restart_required || []).length) {
-      toast(`已保存；${r.restart_required.join("、")} 需重启生效`);
+      toast("已保存；" + r.restart_required.join("、") + " 需重启生效");
     } else {
-      toast(`已保存：${changed.length} 项`);
+      toast("已保存：" + saved.length + " 项");
     }
   } catch (e) {
     toast(e.message || "保存失败", true);
   } finally {
     $("settings-save").disabled = false;
+    paintSettingsDirty();
   }
 }
 
@@ -501,6 +662,8 @@ async function loadSettings(force = false) {
   }
   try {
     state.settings = await bridge.apiGet("settings");
+    state.settingsDraft = {};
+    state.settingsBase = null;
     renderSettings();
   } catch (e) {
     toast(e.message || "设置加载失败", true);
@@ -652,21 +815,39 @@ function bind() {
   });
 
   $("settings-save").addEventListener("click", saveSettings);
-  $("settings-groups").addEventListener("input", updateDirty);
-  $("settings-groups").addEventListener("change", updateDirty);
+  $("settings-undo").addEventListener("click", undoSettings);
+  $("settings-groups").addEventListener("input", onSettingsInput);
+  $("settings-groups").addEventListener("change", onSettingsInput);
+  $("settings-nav").addEventListener("click", (e) => {
+    const btn = e.target.closest(".set-nav-item");
+    if (!btn) return;
+    const card = document.querySelector('.set-group[data-group="' + btn.dataset.goto + '"]');
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("settings-nav").querySelectorAll(".set-nav-item").forEach((el) => {
+      el.classList.toggle("on", el === btn);
+    });
+  });
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !$("panel-settings").hidden) {
+      e.preventDefault();
+      saveSettings();
+    }
+  });
   $("settings-filter").addEventListener("input", () => {
     state.settingsFilter = $("settings-filter").value;
     renderSettings();
   });
   $("settings-defaults").addEventListener("click", () => {
     const groups = (state.settings && state.settings.groups) || [];
-    groups.forEach((g) => (g.fields || []).forEach((f) => {
-      const el = document.getElementById(`set-${f.key}`);
-      if (!el) return;
-      if (el.type === "checkbox") el.checked = Boolean(f.default);
-      else el.value = f.default ?? "";
-    }));
-    updateDirty();
+    const draft = { ...state.settingsDraft };
+    groups.forEach((g) =>
+      (g.fields || []).forEach((f) => {
+        if (f.type === "bool") draft[f.key] = Boolean(f.default);
+        else draft[f.key] = f.default ?? "";
+      })
+    );
+    state.settingsDraft = draft;
+    renderSettings();
     toast("已填入默认值，记得保存");
   });
 

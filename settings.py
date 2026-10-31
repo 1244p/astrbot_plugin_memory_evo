@@ -77,6 +77,18 @@ GROUPS: list[tuple[str, str, list[str]]] = [
 
 GROUP_TITLES = {gid: title for gid, title, _ in GROUPS}
 
+# 面板设置页每个分组标题下面的一行说明。写清楚“这组影响什么”，而不是复述字段名。
+GROUP_DESCS: dict[str, str] = {
+    "basic": "总开关、抽取节奏与缓冲上限。调快抽取能看到更多细节，也更烧 token。",
+    "recall": "每轮往提示词里塞多少记忆、按什么门槛筛。数字越大越啰嗦。",
+    "persona": "人格五维的注入、单次演化步长与回落基线。基线决定它长期的性格底色。",
+    "semantic": "句向量召回。没配嵌入模型时自动退回字面重叠匹配，功能仍在。",
+    "care": "用户安静多久后主动开口，以及哪些时间不许打扰。",
+    "model": "抽取用的模型。留空则跟随当前会话模型。",
+    "log": "插件自己的事件日志，排查问题时看这里，不用翻 AstrBot 主日志。",
+    "other": "暂未归组的配置项。",
+}
+
 # 数值边界。schema 里没写 min/max，这里补上，免得有人把 top_k 填成 500。
 LIMITS: dict[str, tuple[float, float]] = {
     "top_k": (1, 20),
@@ -232,11 +244,23 @@ def describe(schema: dict, values: dict) -> dict:
         buckets[_group_of(key)].append(item)
 
     ordered = [
-        {"id": gid, "title": title, "fields": buckets.get(gid, [])}
+        {
+            "id": gid,
+            "title": title,
+            "desc": GROUP_DESCS.get(gid, ""),
+            "fields": buckets.get(gid, []),
+        }
         for gid, title, _ in GROUPS
     ]
     if buckets["other"]:
-        ordered.append({"id": "other", "title": "其他", "fields": buckets["other"]})
+        ordered.append(
+            {
+                "id": "other",
+                "title": "其他",
+                "desc": GROUP_DESCS["other"],
+                "fields": buckets["other"],
+            }
+        )
     return {"groups": ordered, "restart_fields": sorted(RESTART_FIELDS)}
 
 

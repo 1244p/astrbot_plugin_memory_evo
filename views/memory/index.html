@@ -123,23 +123,25 @@
       </section>
 
       <section class="panel" id="panel-settings" hidden>
-        <div class="toolbar">
+        <div class="set-top">
           <div class="search">
             <span class="ico">⌕</span>
-            <input id="settings-filter" type="search" placeholder="找配置项，如 空闲 / 阈值" />
+            <input id="settings-filter" type="search" placeholder="找配置项，如 空闲 / 阈值 / 模型" />
           </div>
           <p class="hint">改动写回插件配置文件，保存后立即生效；标「需重启」的要重启 AstrBot。</p>
         </div>
+        <nav class="set-nav" id="settings-nav"></nav>
         <div id="settings-groups"></div>
         <div class="set-savebar">
           <span class="dirty" id="settings-dirty">没有改动</span>
           <span class="spacer"></span>
+          <button id="settings-undo" class="btn quiet sm" disabled>撤销改动</button>
           <button id="settings-defaults" class="btn ghost sm">填入默认值</button>
-          <button id="settings-save" class="btn sm">保存设置</button>
+          <button id="settings-save" class="btn sm" disabled>保存设置</button>
         </div>
       </section>
 
-      <p class="toast" id="toast" hidden></p>
+<p class="toast" id="toast" hidden></p>
     </div>
     <script type="module" src="./app.js"></script>
   </body>

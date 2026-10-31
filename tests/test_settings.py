@@ -39,6 +39,12 @@ class DescribeTest(unittest.TestCase):
         titles = {g["id"]: g["title"] for g in data["groups"]}
         self.assertEqual(titles["care"], "主动消息")
 
+    def test_every_group_has_description(self):
+        data = settings.describe(self.schema, {})
+        for g in data["groups"]:
+            self.assertIn("desc", g)
+            self.assertTrue(g["desc"].strip(), "分组 %s 缺少说明" % g["id"])
+
     def test_current_values_override_defaults(self):
         data = settings.describe(self.schema, {"top_k": 9, "care_schedule": "09:00-12:00"})
         fields = {f["key"]: f for g in data["groups"] for f in g["fields"]}
