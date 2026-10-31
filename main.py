@@ -259,6 +259,7 @@ class MemoryEvoPlugin(Star):
         now = proactive.local_now(tz_name)
         state = await asyncio.to_thread(self.store.get_care_state, scope)
         ok, reason = proactive.decide(now, state, cfg)
+        gates = proactive.gate_detail(now, state, cfg)
         seen = self._care_seen.get(scope) or {}
         idle = (time.time() - float(state["last_active"])) / 60 if state["last_active"] else -1
         gap = (time.time() - float(state["last_sent"])) / 60 if state["last_sent"] else -1
@@ -268,9 +269,10 @@ class MemoryEvoPlugin(Star):
             f"现在 {now.strftime('%m-%d %H:%M')}（{tz_name}）",
             f"结论：{'能发' if ok else '现在不能发'} —— {proactive.reason_text(reason)}",
             f"总开关 {self._yn(bool(cfg['enabled']))}｜本会话 {self._yn(bool(state.get('enabled', 1)))}",
-            f"空闲 {'还没记录' if idle < 0 else str(int(idle)) + ' 分钟'} / 要求 {int(cfg['min_idle_minutes'])} 分钟",
+            f"空闲 {'还没记录' if idle < 0 else str(int(idle)) + ' 分钟'} / 要求 {int(cfg['min_idle_minutes'])} 分钟"
+            f"{self._mark(gates['idle_ok'])}",
             f"距上次主动 {('还没发过' if gap < 0 else str(int(gap)) + ' 分钟')}"
-            f" / 模型给的间隔 {state['next_gap_minutes']} 分钟",
+            f" / 上次模型要求隔 {state['next_gap_minutes']} 分钟{self._mark(gates['gap_ok'])}",
             f"今日已发 {state['sent_today']}/{cfg['daily_max']}｜连续未回应 {state['unanswered']}/{cfg['max_unanswered']}",
             f"免打扰 {cfg['quiet_start']}-{cfg['quiet_end']}｜允许时段 {cfg['schedule'] or '不限'}",
         ]
@@ -283,6 +285,11 @@ class MemoryEvoPlugin(Star):
             lines.append("上次自动检查：还没跑过（后台心跳可能没起来，看日志有没有 janitor）")
         lines.append(f"抽取缓冲：{len(buf) if buf else 0} 轮｜抽取模型 {provider_id}")
         return chr(10).join(lines)
+
+    @staticmethod
+    def _mark(flag: bool) -> str:
+        """给 why 输出加个对勾/叉，两个闸门各自是否达标一眼看出。"""
+        return " ✓" if flag else " ✗"
 
     @staticmethod
     def _yn(flag: bool) -> str:

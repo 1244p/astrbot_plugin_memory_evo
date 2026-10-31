@@ -58,10 +58,52 @@ class DecideTest(unittest.TestCase):
         self.assertEqual((ok, why), (False, "too_soon"))
 
     def test_next_gap_respected(self):
+        # 模型要求隔 180 分钟，才发过 60 分钟，即使已经静默 120 分钟也不发
         ok, why = proactive.decide(
-            NOW, state(last_active=NOW.timestamp() - 120 * 60, next_gap_minutes=180), CFG
+            NOW,
+            state(
+                last_active=NOW.timestamp() - 120 * 60,
+                last_sent=NOW.timestamp() - 60 * 60,
+                next_gap_minutes=180,
+            ),
+            CFG,
         )
         self.assertEqual(why, "too_soon")
+
+    def test_gap_does_not_inflate_idle_requirement(self):
+        # 回归：曾经写成 idle < max(min_idle, gap)，模型给 120 分钟间隔后
+        # 就要求用户也静默 120 分钟，导致「空闲 77 / 要求 60」却判 too_soon
+        ok, why = proactive.decide(
+            NOW,
+            state(
+                last_active=NOW.timestamp() - 77 * 60,
+                last_sent=NOW.timestamp() - 132 * 60,
+                next_gap_minutes=120,
+            ),
+            dict(CFG, min_idle_minutes=60),
+        )
+        self.assertEqual((ok, why), (True, "ok"))
+
+    def test_never_sent_ignores_gap(self):
+        ok, why = proactive.decide(
+            NOW, state(last_active=NOW.timestamp() - 95 * 60, next_gap_minutes=180), CFG
+        )
+        self.assertEqual((ok, why), (True, "ok"))
+
+    def test_gate_detail_reports_both_gates(self):
+        detail = proactive.gate_detail(
+            NOW,
+            state(
+                last_active=NOW.timestamp() - 77 * 60,
+                last_sent=NOW.timestamp() - 132 * 60,
+                next_gap_minutes=120,
+            ),
+            dict(CFG, min_idle_minutes=60),
+        )
+        self.assertTrue(detail["idle_ok"])
+        self.assertTrue(detail["gap_ok"])
+        self.assertEqual(int(detail["since_sent"]), 132)
+        self.assertEqual(int(detail["idle_minutes"]), 77)
 
     def test_daily_cap(self):
         st = state(sent_date=NOW.strftime("%Y-%m-%d"), sent_today=3)

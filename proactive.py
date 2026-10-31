@@ -153,8 +153,15 @@ def decide(
 
     min_idle = float(cfg.get("min_idle_minutes", 90))
     gap = float(state.get("next_gap_minutes", 0) or 0)
-    idle_minutes = (now.timestamp() - float(state.get("last_active", 0) or 0)) / 60
-    if idle_minutes < max(min_idle, gap):
+    ts = now.timestamp()
+    last_active = float(state.get("last_active", 0) or 0)
+    last_sent = float(state.get("last_sent", 0) or 0)
+    idle_minutes = (ts - last_active) / 60
+    since_sent = (ts - last_sent) / 60 if last_sent else float("inf")
+    # 两个闸门互相独立：用户得安静够久，且距上次主动得够久。
+    # 曾经写成 idle < max(min_idle, gap)，模型给出 120 分钟间隔后就要求用户也静默 120 分钟，
+    # 面板显示「空闲 77 / 要求 60」却判 too_soon，自相矛盾。
+    if idle_minutes < min_idle or since_sent < gap:
         return False, "too_soon"
 
     sent_today = int(state.get("sent_today", 0)) if state.get("sent_date") == _today(now) else 0
@@ -166,6 +173,25 @@ def decide(
         return False, "probability"
 
     return True, "ok"
+
+
+def gate_detail(now: datetime, state: dict, cfg: dict) -> dict:
+    """拆开两个闸门，给 why / 面板显示用：空闲够不够、距上次主动够不够。"""
+    ts = now.timestamp()
+    last_active = float(state.get("last_active", 0) or 0)
+    last_sent = float(state.get("last_sent", 0) or 0)
+    min_idle = float(cfg.get("min_idle_minutes", 90))
+    gap = float(state.get("next_gap_minutes", 0) or 0)
+    idle = (ts - last_active) / 60 if last_active else -1.0
+    since = (ts - last_sent) / 60 if last_sent else float("inf")
+    return {
+        "idle_minutes": idle,
+        "min_idle_minutes": min_idle,
+        "idle_ok": bool(last_active) and idle >= min_idle,
+        "since_sent": since,
+        "gap_minutes": gap,
+        "gap_ok": since >= gap,
+    }
 
 
 def render_prompt(

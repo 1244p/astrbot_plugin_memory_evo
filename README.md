@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.7.0-blue)
+![version](https://img.shields.io/badge/version-v0.7.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -61,7 +61,7 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 - **主动开口**：用户安静够久时，它会结合「记得的事 + 当前心情」自己发一条，而不是定时刷屏
 - **WebUI 面板**：记忆 / 人格 / 主动消息 / 日志 / 设置五个页签，可搜可筛、可批量删可确认、可导出，配置项直接在面板里改（v0.5 → v0.7）
 - **自己的事件日志**：抽取、召回、人格演化、主动消息的每次判定都记一条，带事件名和结构化字段；面板「日志」页按级别筛、按关键词搜，`/memory logs` 也能直接看（v0.7）
-- **离线可跑测试**：166 个用例不需要安装 AstrBot 也能执行
+- **离线可跑测试**：169 个用例不需要安装 AstrBot 也能执行
 
 ---
 
