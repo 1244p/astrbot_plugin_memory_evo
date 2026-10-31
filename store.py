@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS persona_log (
 );
 """
 
+PERSONA_MIGRATIONS = (
+    ("last_evolve_at", "REAL NOT NULL DEFAULT 0"),
+    ("day_key", "TEXT NOT NULL DEFAULT ''"),
+    ("day_used", "REAL NOT NULL DEFAULT 0"),
+)
+
+
 INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(scope, superseded_by, status);
 CREATE INDEX IF NOT EXISTS idx_facts_key   ON facts(scope, subject, predicate);
@@ -215,6 +222,10 @@ class MemoryStore:
         ):
             if name not in cols:
                 self.conn.execute(ddl)
+        pcols = {row["name"] for row in self.conn.execute("PRAGMA table_info(persona)")}
+        for name, ddl in PERSONA_MIGRATIONS:
+            if name not in pcols:
+                self.conn.execute("ALTER TABLE persona ADD COLUMN %s %s" % (name, ddl))
         self.conn.commit()
 
     # ---------------- facts ----------------
@@ -514,21 +525,55 @@ class MemoryStore:
                 (scope, json.dumps(traits, ensure_ascii=False), "", 1, time.time()),
             )
             self.conn.commit()
-            return {"traits": traits, "mood": "", "version": 1}
+            return {
+                "traits": traits,
+                "mood": "",
+                "version": 1,
+                "last_evolve_at": 0.0,
+                "day_key": "",
+                "day_used": 0.0,
+            }
         traits = json.loads(row["traits"])
         for key, value in defaults.items():
             traits.setdefault(key, value)
-        return {"traits": traits, "mood": row["mood"], "version": int(row["version"])}
+        return {
+            "traits": traits,
+            "mood": row["mood"],
+            "version": int(row["version"]),
+            "last_evolve_at": float(row["last_evolve_at"] or 0),
+            "day_key": str(row["day_key"] or ""),
+            "day_used": float(row["day_used"] or 0),
+        }
 
-    def save_persona(self, scope: str, traits: dict[str, float], mood: str, reason: str = "") -> int:
+    def save_persona(
+        self,
+        scope: str,
+        traits: dict[str, float],
+        mood: str,
+        reason: str = "",
+        day_key: str = "",
+        day_used: float = 0.0,
+    ) -> int:
         now = time.time()
         current = self.conn.execute("SELECT version FROM persona WHERE scope=?", (scope,)).fetchone()
         version = int(current["version"]) + 1 if current else 1
         self.conn.execute(
-            "INSERT INTO persona(scope,traits,mood,version,updated_at) VALUES(?,?,?,?,?)"
+            "INSERT INTO persona(scope,traits,mood,version,updated_at,last_evolve_at,day_key,day_used)"
+            " VALUES(?,?,?,?,?,?,?,?)"
             " ON CONFLICT(scope) DO UPDATE SET traits=excluded.traits, mood=excluded.mood,"
-            " version=excluded.version, updated_at=excluded.updated_at",
-            (scope, json.dumps(traits, ensure_ascii=False), mood[:200], version, now),
+            " version=excluded.version, updated_at=excluded.updated_at,"
+            " last_evolve_at=excluded.last_evolve_at, day_key=excluded.day_key,"
+            " day_used=excluded.day_used",
+            (
+                scope,
+                json.dumps(traits, ensure_ascii=False),
+                mood[:200],
+                version,
+                now,
+                now,
+                day_key,
+                float(day_used),
+            ),
         )
         self.conn.execute(
             "INSERT INTO persona_log(scope,traits,reason,created_at) VALUES(?,?,?,?)",

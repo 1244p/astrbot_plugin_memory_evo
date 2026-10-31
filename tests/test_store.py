@@ -72,7 +72,7 @@ class StoreTest(unittest.TestCase):
     def test_persona_roundtrip(self):
         state = self.store.get_persona(self.scope, DEFAULTS)
         self.assertEqual(state["version"], 1)
-        traits = persona.apply_deltas(state["traits"], {"intimacy": 0.05}, baseline=DEFAULTS)
+        traits, _spent = persona.apply_deltas(state["traits"], {"intimacy": 0.05}, baseline=DEFAULTS)
         version = self.store.save_persona(self.scope, traits, "开心", "聊得很顺")
         self.assertEqual(version, 2)
         self.assertEqual(len(self.store.persona_timeline(self.scope)), 1)
@@ -80,18 +80,69 @@ class StoreTest(unittest.TestCase):
 
 class PersonaTest(unittest.TestCase):
     def test_step_is_clamped(self):
-        traits = persona.apply_deltas(DEFAULTS, {"intimacy": 5.0}, max_step=0.06, decay=0.0)
+        traits, spent = persona.apply_deltas(
+            DEFAULTS, {"intimacy": 5.0}, max_step=0.06, half_life_days=3650, hours=24
+        )
         self.assertAlmostEqual(traits["intimacy"], 0.56, places=4)
+        self.assertLessEqual(spent, 0.06 + 1e-9)
 
     def test_bounds(self):
-        high = persona.apply_deltas({k: 0.99 for k in persona.TRAIT_KEYS}, {}, max_step=0.06, decay=0.0)
+        high, _ = persona.apply_deltas(
+            {k: 0.99 for k in persona.TRAIT_KEYS}, {}, max_step=0.06, hours=24
+        )
         self.assertLessEqual(max(high.values()), 1.0)
-        low = persona.apply_deltas({k: 0.01 for k in persona.TRAIT_KEYS}, {}, max_step=0.06, decay=0.0)
+        low, _ = persona.apply_deltas(
+            {k: 0.01 for k in persona.TRAIT_KEYS}, {}, max_step=0.06, hours=24
+        )
         self.assertGreaterEqual(min(low.values()), 0.0)
 
     def test_decay_pulls_to_baseline(self):
-        traits = persona.apply_deltas({k: 0.9 for k in persona.TRAIT_KEYS}, {}, decay=0.1)
-        self.assertLess(traits["warmth"], 0.9)
+        traits, _ = persona.apply_deltas(
+            {k: 0.9 for k in persona.TRAIT_KEYS}, {}, half_life_days=7, hours=24 * 7
+        )
+        self.assertAlmostEqual(traits["warmth"], 0.7, places=3)
+
+    def test_frequent_flushes_barely_move(self):
+        """五分钟内连开两次：第二次几乎不动，这是「按时间配速」的核心。"""
+        first, spent = persona.apply_deltas(DEFAULTS, {"warmth": 0.06}, hours=24)
+        second, spent2 = persona.apply_deltas(
+            first, {"warmth": 0.06}, hours=5 / 60.0, daily_used=spent
+        )
+        self.assertGreater(first["warmth"] - 0.5, 0.02)
+        self.assertGreater(second["warmth"], first["warmth"])
+        self.assertLess(second["warmth"] - first["warmth"], 0.001)
+        self.assertGreater(spent2, 0)
+        self.assertLess(spent2, spent)
+
+    def test_daily_budget_caps_total_movement(self):
+        used = 0.0
+        traits = dict(DEFAULTS)
+        for _ in range(40):
+            traits, spent = persona.apply_deltas(
+                traits, {k: 0.06 for k in persona.TRAIT_KEYS}, hours=24, daily_used=used
+            )
+            used += spent
+        self.assertLessEqual(used, 0.15 + 0.001)
+        self.assertLess(traits["warmth"], 0.56)
+
+    def test_decay_does_not_eat_budget(self):
+        """离基线很远时，半衰期回归不该把当日预算吃光。"""
+        _traits, spent = persona.apply_deltas(
+            {k: 0.95 for k in persona.TRAIT_KEYS}, {}, half_life_days=7, hours=24, daily_used=0.0
+        )
+        self.assertEqual(spent, 0.0)
+
+    def test_move_step_is_min_of_three_caps(self):
+        self.assertAlmostEqual(persona.move_step(0.03, hours=6), 0.0075, places=4)
+        self.assertAlmostEqual(persona.move_step(0.03, hours=48), 0.03, places=4)
+        self.assertAlmostEqual(
+            persona.move_step(0.03, hours=24, daily_used=0.14, daily_budget=0.15), 0.01, places=4
+        )
+        self.assertEqual(persona.move_step(0.03, hours=24, daily_used=0.15, daily_budget=0.15), 0.0)
+
+    def test_relax_factor_half_life(self):
+        self.assertAlmostEqual(persona.relax_factor(24 * 7, 7), 0.5, places=4)
+        self.assertAlmostEqual(persona.relax_factor(0, 7), 0.0, places=6)
 
     def test_render_is_short(self):
         text = persona.render(DEFAULTS, "有点困")

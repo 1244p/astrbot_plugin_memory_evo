@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.7.5-blue)
+![version](https://img.shields.io/badge/version-v0.8.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -144,14 +144,18 @@ req.extra_user_content_parts.append(TextPart(text="<memory>…</memory>"))
 
 ### 三、人格：为什么要限速
 
-性格不是数值越大越好，而是**不能突变、也不能漂到极值**。所以三层约束叠在一起：
+性格不是数值越大越好，而是**不能突变、也不能漂到极值**。关键是：**位移速度必须按真实时间算，不能按对话轮数算**——
+一天聊 5 轮和聊 100 轮，人格不该走出两种速度来。所以三层约束叠在一起：
 
 ```python
-# 1. 步长截断：一次对话最多变 6%
-delta = clamp(delta, -max_step, +max_step)
+# 1. 单次步长：被时间配速和当日预算同时压制
+step = min(max_step,                       # 单次硬上限
+           max_step * min(1, hours / 24),  # 距上次演化多久
+           daily_budget - day_used)        # 今天的余额
+delta = clamp(delta, -step, +step)
 
-# 2. 基线回归：每轮向出厂性格拉回 decay
-value += (baseline - value) * decay
+# 2. 基线回归：按半衰期算，7 天回一半
+value += (baseline - value) * (1 - 0.5 ** (hours / (half_life_days * 24)))
 
 # 3. 硬边界
 value = clamp(value, 0.0, 1.0)
@@ -160,7 +164,10 @@ value = clamp(value, 0.0, 1.0)
 五个维度：**亲密度 / 跳脱度 / 直给度 / 主动度 / 温度**。
 
 - 只有 `delta`，没有绝对值——模型没法一把把性格设成 1.0
-- `decay` 让角色有「性格底色」：吵完架会降温，但不会永久变成另一个人
+- `persona_daily_budget`（默认 0.15）是**一天的总位移预算**：五维累计走满 15% 当天就不再前进。
+  这是 v0.8.0 修的核心问题——旧版按「每次 flush 最多 6%」限速，而 flush 频率由 `flush_turns` 决定，
+  把 `flush_turns` 调到 1~2 就能一天冲上百次，人格几小时顶到 100 下不来
+- `persona_half_life_days`（默认 7）让角色有「性格底色」：吵完架会降温，但不会永久变成另一个人
 - 每次演化写入 `persona_log`（traits + 理由 + 版本号），`/memory persona` 可查、可回滚
 
 渲染时不暴露数字，只给程度词：
@@ -233,8 +240,9 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 | `max_item_chars` | `80` | 单条记忆注入最大字符 |
 | `persona_inject` | `true` | 注入 `<self_state>` |
 | `persona_evolve` | `true` | 允许人格演化 |
-| `max_step` | `0.06` | 单次演化最大步长 |
-| `decay` | `0.01` | 向基线回归速度 |
+| `max_step` | `0.03` | 单次演化最大步长（还会按时间配速） |
+| `persona_daily_budget` | `0.15` | 一天内五维累计位移上限，防止高频对话把人格顶满 |
+| `persona_half_life_days` | `7` | 回归基线的半衰期（天），替代旧的每步 `decay` |
 | `baseline_*` | `0.5` | 出厂性格（五维各一项） |
 | `care_enable` | `false` | 主动消息总开关（仅私聊） |
 | `care_min_idle_minutes` | `90` | 至少空闲多少分钟才考虑开口 |
@@ -256,9 +264,9 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 
 | 目标 | 配置 |
 |---|---|
-| 日常陪伴（默认） | `top_k=6, flush_turns=6, max_step=0.05, decay=0.01` |
+| 日常陪伴（默认） | `top_k=6, flush_turns=6, max_step=0.03, persona_daily_budget=0.15` |
 | 高密度私聊（一天几十轮） | `top_k=8, flush_turns=4, max_inject_chars=800` |
-| 想要「半年后判若两人」 | `max_step=0.08, decay=0.002`，`baseline_*` 按角色设定 |
+| 想要「半年后判若两人」 | `max_step=0.06, persona_daily_budget=0.3, persona_half_life_days=30`，`baseline_*` 按角色设定 |
 
 ---
 
@@ -458,7 +466,7 @@ astrbot_plugin_memory_evo/
 会。所以配置里有 `extract_provider_id`，填一个便宜模型；`flush_turns` 调大也能直接降频。
 
 **Q：人格会不会被用户故意带偏？**
-有 `max_step` 限速和 `decay` 回归，单次对话最多 6%，且每轮往基线拉回。要更保险就把 `max_step` 降到 0.03。
+有 `max_step` 单次限速、按真实时间配速，以及 `persona_daily_budget` 每日总预算——一天最多走 15%，且半衰期（`persona_half_life_days`，默认 7 天）会持续往基线拉回。要更保险就把预算降到 0.1。
 
 ---
 

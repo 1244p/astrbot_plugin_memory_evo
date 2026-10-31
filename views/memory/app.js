@@ -266,6 +266,15 @@ function renderPersona() {
     })
     .join("");
 
+  const used = Number(p.day_used || 0);
+  const last = Number(p.last_evolve_at || 0);
+  const summary = $("persona-summary");
+  if (summary) {
+    summary.textContent = last
+      ? "今日已用位移 " + (used * 100).toFixed(1) + "% / 15%，上次演化 " + when(last)
+      : "还没有演化过，人格仍是初始基线。";
+  }
+
   const log = (p.log || []).slice();
   if (!log.length) {
     $("persona-log").innerHTML = `<li><div class="tl-reason hint">还没有演化记录，人格仍是初始值。</div></li>`;

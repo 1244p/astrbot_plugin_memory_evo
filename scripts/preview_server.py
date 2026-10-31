@@ -78,6 +78,9 @@ def fixture_persona() -> dict:
         "traits": traits,
         "baseline": baseline,
         "version": 34,
+        "day_key": "2025-10-29",
+        "day_used": 0.062,
+        "last_evolve_at": 1761698000,
         "log": [
             {
                 "version": 34,
@@ -242,8 +245,9 @@ def build_payload() -> dict:
         "care_min_idle_minutes": 60,
         "care_schedule": "09:00-23:00",
         "care_probability": 0.85,
-        "max_step": 0.06,
-        "decay": 0.01,
+        "max_step": 0.03,
+        "persona_daily_budget": 0.15,
+        "persona_half_life_days": 7,
         "min_confidence": 0.45,
     }
     return {

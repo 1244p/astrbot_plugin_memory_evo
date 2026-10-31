@@ -238,6 +238,9 @@ def persona_block(conn: sqlite3.Connection, scope: str, baseline: dict[str, floa
             )
         )
     ]
+    day_used = float(row["day_used"] or 0) if row is not None else 0.0
+    day_key = str(row["day_key"] or "") if row is not None else ""
+    last_evolve = float(row["last_evolve_at"] or 0) if row is not None else 0.0
     return {
         "scope": scope,
         "baseline": baseline,
@@ -246,6 +249,9 @@ def persona_block(conn: sqlite3.Connection, scope: str, baseline: dict[str, floa
         "mood": mood,
         "updated_at": updated,
         "log": log,
+        "day_key": day_key,
+        "day_used": round(day_used, 4),
+        "last_evolve_at": last_evolve,
     }
 
 

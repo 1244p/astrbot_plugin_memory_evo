@@ -40,14 +40,20 @@
   "max_step": {
     "description": "单次演化最大步长",
     "type": "float",
-    "hint": "0.06 表示每次最多变化 6%。调小更稳，调大更戏剧化。",
-    "default": 0.06
+    "hint": "0.03 表示一次 flush 最多移动 3%。实际步长还会按「距上次演化多久」配速，并受每日预算限制。",
+    "default": 0.03
   },
-  "decay": {
-    "description": "向基线回归系数",
+  "persona_daily_budget": {
+    "description": "每日演化总预算",
     "type": "float",
-    "hint": "0.01 表示每轮演化向基线拉回 1%，防止长期漂到极值。",
-    "default": 0.01
+    "hint": "0.15 表示一天内五维累计最多移动 15%。防止高频对话把人格顶到 100 下不来。",
+    "default": 0.15
+  },
+  "persona_half_life_days": {
+    "description": "回归基线的半衰期（天）",
+    "type": "float",
+    "hint": "7 表示偏离基线后，不推也不动的情况下 7 天回一半。替代了旧的每步 decay 系数。",
+    "default": 7
   },
   "baseline_intimacy": {
     "description": "基线：亲密度",

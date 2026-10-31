@@ -864,15 +864,25 @@ class MemoryEvoPlugin(Star):
                 )
                 deltas, mood, why = extractor.sanitize_persona(pens)
                 state = await asyncio.to_thread(self.store.get_persona, scope, self.baseline)
-                traits = persona.apply_deltas(
+                today, hours, used = self._persona_clock(state)
+                traits, spent = persona.apply_deltas(
                     state["traits"],
                     deltas,
-                    max_step=float(self._get("max_step", 0.06)),
-                    decay=float(self._get("decay", 0.01)),
+                    max_step=float(self._get("max_step", 0.03)),
+                    half_life_days=float(self._get("persona_half_life_days", 7)),
                     baseline=self.baseline,
+                    hours=hours,
+                    daily_used=used,
+                    daily_budget=float(self._get("persona_daily_budget", 0.15)),
                 )
                 await asyncio.to_thread(
-                    self.store.save_persona, scope, traits, mood or state.get("mood", ""), why
+                    self.store.save_persona,
+                    scope,
+                    traits,
+                    mood or state.get("mood", ""),
+                    why,
+                    today,
+                    round(used + spent, 4),
                 )
                 changed = {k: round(v, 3) for k, v in deltas.items() if abs(v) > 0.001}
                 self._log(
@@ -888,6 +898,19 @@ class MemoryEvoPlugin(Star):
             self.inflight.discard(scope)
 
     # ---------------- 主动开口 ----------------
+
+    def _persona_clock(self, state: dict) -> tuple[str, float, float]:
+        """算出「今天」、距上次演化的小时数、今天已用掉的位移预算。
+
+        人格演化按真实时间配速：一天聊多少轮都不该改变位移速度。
+        """
+        tz = str(self._get("care_timezone", "Asia/Shanghai"))
+        now = proactive.local_now(tz)
+        today = proactive._today(now)
+        last = float(state.get("last_evolve_at") or 0)
+        hours = min(24.0, (now.timestamp() - last) / 3600.0) if last > 0 else 24.0
+        used = float(state.get("day_used") or 0) if str(state.get("day_key") or "") == today else 0.0
+        return today, max(0.0, hours), used
 
     def _care_cfg(self) -> dict:
         return {
