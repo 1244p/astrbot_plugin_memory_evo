@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,6 +132,45 @@ def fixture_care() -> dict:
     }
 
 
+
+def fixture_logs() -> dict:
+    """样例日志：覆盖 INFO/WARN/ERROR/DEBUG 与常见事件名。"""
+    now = 1761699600
+    rows = [
+        ("INFO", "plugin.start", "v0.7.0 已加载", {"db": "/AstrBot/data/plugin_data/…/memory.db", "care": True}),
+        ("INFO", "janitor.start", "后台心跳已启动", {"interval": 20}),
+        ("INFO", "flush.ok", "抽取完成", {"reason": "turns", "turns": 6, "facts": 2}),
+        ("INFO", "persona.evolve", "用户讲了加班的事", {"deltas": {"warmth": 0.04, "intimacy": 0.02}}),
+        ("WARN", "care.skip", "距离上次发言还不够久", {"reason": "too_soon"}),
+        ("INFO", "care.sent", "已主动发送一条", {}),
+        ("WARN", "llm.timeout", "模型调用超时", {"sec": 45.0}),
+        ("ERROR", "flush.fail", "Connection reset by peer", {"reason": "idle"}),
+        ("DEBUG", "inject.ok", "", {"facts": 5, "chars": 312}),
+    ]
+    items = []
+    for i, (lvl, evt, msg, fields) in enumerate(rows):
+        ts = now - (len(rows) - i) * 37
+        items.append({
+            "ts": ts,
+            "time": time.strftime("%m-%d %H:%M:%S", time.localtime(ts)),
+            "lvl": lvl,
+            "evt": evt,
+            "msg": msg,
+            "f": fields,
+        })
+    items.reverse()
+    return {
+        "items": items,
+        "stats": {
+            "day": time.strftime("%Y%m%d", time.localtime(now)),
+            "counts": {"DEBUG": 1, "INFO": 5, "WARN": 2, "ERROR": 1},
+            "events": {"care.skip": 2, "flush.ok": 1, "llm.timeout": 1},
+            "bytes": 4096,
+            "level": "INFO",
+            "days": 7,
+        },
+    }
+
 def fixture_overview() -> dict:
     return {
         "label": "私聊 · 3587…ADF5",
@@ -162,6 +202,7 @@ MOCK_JS = """
     if (endpoint === "persona") return DATA.persona;
     if (endpoint === "care") return DATA.care;
     if (endpoint === "settings") return DATA.settings;
+    if (endpoint === "logs") return DATA.logs;
     return {};
   }
   const bridge = {
@@ -216,6 +257,7 @@ def build_payload() -> dict:
         "facts": fixture_facts(),
         "persona": fixture_persona(),
         "care": fixture_care(),
+        "logs": fixture_logs(),
         "settings": settings_mod.describe(schema, values),
     }
 

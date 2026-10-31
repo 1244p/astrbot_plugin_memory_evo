@@ -207,5 +207,29 @@
     "description": "抽取请求超时（秒）",
     "type": "int",
     "default": 45
+  },
+  "log_level": {
+    "description": "日志级别",
+    "type": "string",
+    "options": [
+      "DEBUG",
+      "INFO",
+      "WARN",
+      "ERROR"
+    ],
+    "hint": "写进 plugin_data 下 logs/ 的事件日志。排查时临时调到 DEBUG，平时留 INFO。",
+    "default": "INFO"
+  },
+  "log_days": {
+    "description": "日志保留天数",
+    "type": "int",
+    "hint": "按天分文件，超期自动删除。",
+    "default": 7
+  },
+  "log_mirror": {
+    "description": "警告同时写 AstrBot 日志",
+    "type": "bool",
+    "hint": "WARN/ERROR 也走一遍 AstrBot 的 logger，方便 docker logs 里直接看到；DEBUG/INFO 不会。",
+    "default": true
   }
 }

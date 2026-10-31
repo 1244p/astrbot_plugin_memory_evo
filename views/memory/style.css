@@ -795,6 +795,91 @@ html[data-theme="dark"] .care-hero .mark { color: var(--primary); }
 .toast::before { content: "✓"; opacity: 0.9; }
 .toast.bad::before { content: "!"; font-weight: 700; }
 
+/* ---------------- 日志 ---------------- */
+
+.log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.log {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  min-height: 34px;
+}
+
+.log:last-child { border-bottom: 0; }
+.log:hover { background: var(--surface-2); }
+
+.log-time { color: var(--text-3); flex: none; width: 84px; }
+.log-level {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  flex: none;
+  width: 46px;
+}
+.log-evt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--primary-ink);
+  flex: none;
+  width: 168px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-msg {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-fields {
+  display: flex;
+  gap: 6px;
+  flex: 0 1 auto;
+  max-width: 46%;
+  overflow: hidden;
+}
+.log-field {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 5px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log.warn .log-level { color: var(--warn); }
+.log.error .log-level { color: var(--danger); }
+.log.error { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.log.debug .log-level,
+.log.debug .log-msg { color: var(--text-3); }
+
+@media (max-width: 720px) {
+  .log { flex-wrap: wrap; row-gap: 4px; }
+  .log-msg { flex: 1 1 100%; }
+  .log-fields { max-width: 100%; }
+}
+
 @media (max-width: 720px) {
   .page { padding: 16px 14px 32px; }
   .stat-strip { grid-template-columns: repeat(2, 1fr); }

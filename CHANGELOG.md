@@ -25,6 +25,42 @@
 - 跨平台身份归一 `/memory link`
 - 同槽位合并摘要
 
+## [v0.7.0] - 2026-10-31
+
+### Added
+
+- **插件自己的事件日志**：`plugin_data/astrbot_plugin_memory_evo/logs/memory_evo-YYYYMMDD.log`，
+  JSONL、按天分文件、按 `log_days` 自动清理。每条带 `evt` 事件名与结构化字段，不再只能靠
+  AstrBot 那几万行输出里翻
+
+  已埋点的事件：
+
+  | 事件 | 什么时候记 | 关键字段 |
+  |---|---|---|
+  | `plugin.start` / `plugin.stop` | 加载、卸载 | `db`、`enable`、`care`、`log_level` |
+  | `janitor.start` / `janitor.fail` | 心跳启动；某一轮抛异常 | `interval` |
+  | `flush.begin` / `flush.ok` / `flush.empty` | 每次抽取 | `reason`、`turns`、`facts` |
+  | `flush.timeout` / `flush.fail` | 抽取超时或报错 | `reason`、错误消息 |
+  | `llm.ok` / `llm.timeout` / `llm.fail` | 模型调用（`llm.ok` 为 DEBUG） | `ms`、`chars`、`parsed` |
+  | `provider.none` | 找不到可用模型 | — |
+  | `recall.fail` | 召回抛异常 | — |
+  | `persona.evolve` | 人格有实际变化 | `deltas` |
+  | `care.sent` / `care.skip` | 主动消息发了；原因变了才记一条 | `reason` |
+  | `care.fail` / `care.send_fail` | 判定或发送失败 | — |
+  | `settings.save` | 面板保存设置 | `changed` |
+  | `logs.clear` | 清空日志 | `files` |
+
+- 面板新增「日志」页签：按级别筛（全部 / DEBUG / INFO / WARN / ERROR）、关键词搜（事件名、消息、
+  字段值一起搜）、刷新、清空，顶部一条显示当天的级别计数与高频事件
+- `/memory logs [n]` 与 `/memory logs clear`，不用开面板也能看最近发生了什么
+- 新配置：`log_level`（默认 INFO）、`log_days`（默认 7）、`log_mirror`（WARN/ERROR 同时写 AstrBot 日志，默认开）
+
+### Changed
+
+- `settings.py` 的分组多了「日志」一组；面板设置页按同样的顺序渲染
+
+测试：142 → 166 个用例（`tests/test_plog.py` 19 条 + 插件集成 5 条）。
+
 ## [v0.6.2] - 2026-10-31
 
 ### Fixed

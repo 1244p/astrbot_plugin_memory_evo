@@ -11,6 +11,7 @@ const state = {
   persona: null,
   settings: null,
   settingsFilter: "",
+  logs: { level: "", q: "", items: [], stats: null },
   snapshot: {},
 };
 
@@ -461,6 +462,67 @@ async function loadSettings(force = false) {
   }
 }
 
+/* ---------------- 日志 ---------------- */
+
+const LOG_LEVELS = ["", "DEBUG", "INFO", "WARN", "ERROR"];
+
+function renderLogLevels() {
+  $("logs-levels").innerHTML = LOG_LEVELS.map((lv) => {
+    const on = state.logs.level === lv ? " on" : "";
+    return `<button class="chip${on}" data-level="${lv}">${lv || "全部"}</button>`;
+  }).join("");
+}
+
+async function loadLogs() {
+  try {
+    const data = await bridge.apiGet("logs", {
+      limit: 200,
+      level: state.logs.level,
+      q: state.logs.q,
+    });
+    state.logs.items = data.items || [];
+    state.logs.stats = data.stats || null;
+    renderLogs();
+  } catch (e) {
+    toast(e.message || "日志加载失败", true);
+  }
+}
+
+function fmtValue(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function renderLogs() {
+  const { items, stats } = state.logs;
+  $("logs-list").innerHTML = items.map((r) => {
+    const f = r.f || {};
+    const fields = Object.keys(f)
+      .map((k) => `<span class="log-field">${esc(k)}=${esc(fmtValue(f[k]))}</span>`)
+      .join("");
+    return `<li class="log ${esc(String(r.lvl || "INFO").toLowerCase())}">
+      <span class="log-time">${esc(r.time || "")}</span>
+      <span class="log-level">${esc(r.lvl || "INFO")}</span>
+      <span class="log-evt">${esc(r.evt || "")}</span>
+      <span class="log-msg">${esc(r.msg || "")}</span>
+      ${fields ? `<span class="log-fields">${fields}</span>` : ""}
+    </li>`;
+  }).join("");
+  $("logs-empty").hidden = items.length > 0;
+  if (!stats) return;
+  const c = stats.counts || {};
+  const top = Object.entries(stats.events || {})
+    .slice(0, 5)
+    .map(([k, v]) => `${k}×${v}`)
+    .join("、");
+  $("logs-stats").textContent =
+    `${stats.day}：显示 ${items.length} 条 · ` +
+    `DEBUG ${c.DEBUG || 0} / INFO ${c.INFO || 0} / WARN ${c.WARN || 0} / ERROR ${c.ERROR || 0}` +
+    ` · 记录级别 ${stats.level}，保留 ${stats.days} 天` +
+    (top ? ` · 今天高频：${top}` : "");
+}
+
 /* ---------------- 主流程 ---------------- */
 
 async function reload() {
@@ -578,15 +640,45 @@ function bind() {
     }
   });
 
+  $("logs-levels").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    state.logs.level = chip.dataset.level;
+    renderLogLevels();
+    loadLogs();
+  });
+  let logTimer = null;
+  $("logs-filter").addEventListener("input", () => {
+    clearTimeout(logTimer);
+    logTimer = setTimeout(() => {
+      state.logs.q = $("logs-filter").value.trim();
+      loadLogs();
+    }, 260);
+  });
+  $("logs-reload").addEventListener("click", loadLogs);
+  $("logs-clear").addEventListener("click", async () => {
+    try {
+      const r = await bridge.apiPost("logs/clear", {});
+      toast(`已清空 ${r.removed || 0} 个日志文件`);
+      await loadLogs();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+
   $("tabs").addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
     if (!tab) return;
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
     const name = tab.dataset.tab;
-    for (const key of ["facts", "persona", "care", "settings"]) {
+    for (const key of ["facts", "persona", "care", "logs", "settings"]) {
       $(`panel-${key}`).hidden = key !== name;
     }
     if (name === "settings") loadSettings();
+    if (name === "logs") {
+      renderLogLevels();
+      loadLogs();
+    }
   });
 }
 

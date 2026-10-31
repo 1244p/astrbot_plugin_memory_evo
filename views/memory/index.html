@@ -29,6 +29,7 @@
         <button class="tab active" data-tab="facts">记忆</button>
         <button class="tab" data-tab="persona">人格</button>
         <button class="tab" data-tab="care">主动消息</button>
+        <button class="tab" data-tab="logs">日志</button>
         <button class="tab" data-tab="settings">设置</button>
       </nav>
 
@@ -104,6 +105,21 @@
           </label>
           <p class="hint">总开关在插件配置里（care_enable）。这里只切换当前会话。</p>
         </div>
+      </section>
+
+      <section class="panel" id="panel-logs" hidden>
+        <div class="toolbar">
+          <div class="search">
+            <span class="ico">⌕</span>
+            <input id="logs-filter" type="search" placeholder="搜事件名、消息或字段，如 flush / timeout" />
+          </div>
+          <div class="chip-row" id="logs-levels"></div>
+          <button id="logs-reload" class="btn ghost sm">刷新</button>
+          <button id="logs-clear" class="btn quiet sm">清空</button>
+        </div>
+        <p class="hint" id="logs-stats">今天还没有日志。</p>
+        <ul class="log-list" id="logs-list"></ul>
+        <p class="hint" id="logs-empty" hidden>这一天没有符合条件的记录。</p>
       </section>
 
       <section class="panel" id="panel-settings" hidden>

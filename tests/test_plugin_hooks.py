@@ -339,7 +339,7 @@ class ViewsTest(unittest.TestCase):
         plugin = self._make()
         try:
             paths = [r[0] for r in self.routes]
-            self.assertEqual(len(paths), 9)  # v0.6.0 加了 settings
+            self.assertEqual(len(paths), 11)  # v0.6.0 settings、v0.7.0 两条日志接口
             prefix = f"/{main_mod.PLUGIN_NAME}/"
             for route, handler, methods, desc in self.routes:
                 self.assertTrue(route.startswith(prefix), route)
@@ -361,6 +361,88 @@ class ViewsTest(unittest.TestCase):
         root = os.path.join(PLUGIN_DIR, "views", "memory")
         for name in ("index.html", "app.js", "style.css"):
             self.assertTrue(os.path.isfile(os.path.join(root, name)), name)
+
+
+class LogIntegrationTest(unittest.TestCase):
+    """v0.7.0：插件自己的事件日志确实被写上，而不是只存在模块里。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.plugin = main_mod.MemoryEvoPlugin(
+            sys.modules["astrbot.api.star"].Context(), _config(self.tmp)
+        )
+
+    def tearDown(self):
+        asyncio.run(self.plugin.terminate())
+
+    def test_start_is_logged(self):
+        # 测试共用同一个 plugin_data 目录，按自己的 db 路径筛出本条记录
+        db = os.path.join(self.tmp, "hook.db")
+        rows = [
+            r for r in self.plugin.plog.tail(200, evt="plugin.start")
+            if r["f"].get("db") == db
+        ]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn("已加载", rows[0]["msg"])
+        self.assertIn("log_level", rows[0]["f"])
+
+    def test_flush_logs_ok_event(self):
+        payload = (
+            "{\"facts\":[{\"subject\":\"用户\",\"predicate\":\"饮食禁忌\",\"object\":\"只吃素\","
+            "\"kind\":\"preference\",\"importance\":4,\"confidence\":0.9,\"evidence\":\"只吃素\"}]}"
+        )
+        self.plugin.context.provider = FakeProvider(payload)
+        from collections import deque
+
+        self.plugin.buffers["logtest-s1"] = deque([("user", "我最近只吃素", 0.0)])
+        asyncio.run(self.plugin._flush("logtest-s1"))
+        rows = [
+            r for r in self.plugin.plog.tail(200, evt="flush.ok")
+            if r["f"].get("scope") == "logtest-s1"
+        ]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["f"]["facts"], 1)
+        self.assertEqual(rows[0]["f"]["reason"], "manual")
+
+    def test_flush_failure_is_logged_as_error(self):
+        class Boom:
+            async def text_chat(self, **kw):
+                raise RuntimeError("provider 掉了")
+
+        self.plugin.context.provider = Boom()
+        from collections import deque
+
+        self.plugin.buffers["s2"] = deque([("user", "在吗", 0.0)])
+        asyncio.run(self.plugin._flush("s2"))
+        rows = self.plugin.plog.tail(20, level="ERROR")
+        self.assertTrue(any(r["evt"] == "flush.fail" for r in rows), rows)
+
+    def test_level_from_config_filters(self):
+        plugin = main_mod.MemoryEvoPlugin(
+            sys.modules["astrbot.api.star"].Context(),
+            {**_config(tempfile.mkdtemp()), "log_level": "WARN"},
+        )
+        try:
+            self.assertTrue(plugin.plog.enabled("WARN"))
+            self.assertFalse(plugin.plog.enabled("INFO"))
+        finally:
+            asyncio.run(plugin.terminate())
+
+    def test_api_logs_returns_items_and_stats(self):
+        import types
+
+        web = types.ModuleType("astrbot.api.web")
+        web.json_response = lambda data: data
+
+        class Req:
+            query = type("Q", (), {"get": staticmethod(lambda k, d=None, type=None: d)})()
+
+        web.request = Req()
+        sys.modules["astrbot.api.web"] = web
+        out = asyncio.run(self.plugin.api_logs())
+        self.assertIn("items", out)
+        self.assertIn("stats", out)
+        self.assertTrue(out["items"])
 
 
 if __name__ == "__main__":

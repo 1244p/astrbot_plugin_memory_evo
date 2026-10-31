@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import time
@@ -24,10 +25,26 @@ except ImportError:  # pragma: no cover - 仅老版本走到
     def get_astrbot_config_path() -> str:
         return os.path.join(get_astrbot_plugin_data_path(), "config")
 
-from . import dashboard, extractor, persona, proactive, settings
+from . import dashboard, extractor, persona, plog, proactive, settings
 from .store import MemoryStore
 
 PLUGIN_NAME = "astrbot_plugin_memory_evo"
+
+
+def _read_version() -> str:
+    """版本号只有 metadata.yaml 一个来源，读不到就报 unknown，不自己编一个。"""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.yaml")
+        with io.open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("version:"):
+                    return line.split(":", 1)[1].strip().lstrip("v")
+    except OSError:
+        pass
+    return "unknown"
+
+
+PLUGIN_VERSION = _read_version()
 
 HELP_TEXT = (
     "/memory dump 查看记忆（⚠️ 表示待确认）\n"
@@ -36,7 +53,8 @@ HELP_TEXT = (
     "/memory reindex 补写缺失语义向量\n"
     "/memory care 主动消息 on|off|status|why|now\n"
     "/memory forget <id|词|all> 删除\n"
-    "/memory persona 查看人格状态与演化记录"
+    "/memory persona 查看人格状态与演化记录\n"
+    "/memory logs [n|clear] 最近的运行日志"
 )
 
 
@@ -50,6 +68,11 @@ class MemoryEvoPlugin(Star):
             get_astrbot_plugin_data_path(), PLUGIN_NAME, "memory.db"
         )
         self.store = MemoryStore(db_path)
+        self.plog = plog.EventLog(
+            os.path.join(get_astrbot_plugin_data_path(), PLUGIN_NAME, "logs"),
+            level=str(self._get("log_level", "INFO") or "INFO"),
+            days=int(self._get("log_days", 7)),
+        )
         self.baseline = {k: float(self._get(f"baseline_{k}", 0.5)) for k in persona.TRAIT_KEYS}
         self.buffers: dict[str, deque[tuple[str, str, float]]] = {}
         self.inflight: set[str] = set()
@@ -71,6 +94,15 @@ class MemoryEvoPlugin(Star):
         )
         self._register_views()
         self._start_janitor()
+        self._log(
+            "INFO",
+            "plugin.start",
+            f"v{PLUGIN_VERSION} 已加载",
+            db=str(db_path),
+            enable=bool(self._get("enable", True)),
+            care=bool(self._get("care_enable", False)),
+            log_level=self.plog.level,
+        )
 
     # ---------------- 基础设施 ----------------
 
@@ -92,12 +124,31 @@ class MemoryEvoPlugin(Star):
             ("care", self.api_care, ["GET", "POST"], "主动消息状态与开关"),
             ("export", self.api_export, ["GET"], "导出会话记忆"),
             ("settings", self.api_settings, ["GET", "POST"], "读取与保存插件设置"),
+            ("logs", self.api_logs, ["GET"], "读取事件日志"),
+            ("logs/clear", self.api_logs_clear, ["POST"], "清空事件日志"),
         ]
         for path, handler, methods, desc in routes:
             try:
                 register(f"/{PLUGIN_NAME}/{path}", handler, methods, desc)
             except Exception:
                 logger.exception(f"[memory_evo] 注册视图 API 失败：{path}")
+
+    async def api_logs(self):
+        from astrbot.api.web import json_response, request
+
+        limit = request.query.get("limit", 200, type=int)
+        level = request.query.get("level", "") or ""
+        q = request.query.get("q", "") or ""
+        records = await asyncio.to_thread(self.plog.tail, limit, level, q)
+        stats = await asyncio.to_thread(self.plog.stats)
+        return json_response({"items": records, "stats": stats})
+
+    async def api_logs_clear(self):
+        from astrbot.api.web import json_response
+
+        removed = await asyncio.to_thread(self.plog.clear)
+        self._log("WARN", "logs.clear", "日志已清空", files=removed)
+        return json_response({"removed": removed})
 
     async def api_scopes(self):
         from astrbot.api.web import json_response
@@ -297,6 +348,7 @@ class MemoryEvoPlugin(Star):
             logger.exception(f"[memory_evo] 保存设置失败，已改动：{sorted(changed)}")
             raise
         logger.info(f"[memory_evo] 设置已更新：{sorted(changed)}")
+        self._log("INFO", "settings.save", "设置已更新", changed=sorted(changed))
 
         if any(k.startswith("baseline_") for k in changed):
             self.baseline = {k: float(self._get(f"baseline_{k}", 0.5)) for k in persona.TRAIT_KEYS}
@@ -336,6 +388,22 @@ class MemoryEvoPlugin(Star):
         value = self.cfg.get(key, default) if hasattr(self.cfg, "get") else default
         return default if value is None else value
 
+    def _log(self, level: str, evt: str, msg: str = "", **fields) -> None:
+        """写事件日志。WARN/ERROR 按配置同时进 AstrBot 日志，方便 docker logs 里直接看。"""
+        try:
+            self.plog.write(level, evt, msg, **fields)
+        except Exception:  # pragma: no cover - 日志坏了不能连累主流程
+            pass
+        if level in ("WARN", "ERROR") and self._get("log_mirror", True):
+            text = f"[memory_evo] {evt} {msg}".rstrip()
+            extra = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+            if extra:
+                text += " " + extra
+            if level == "ERROR":
+                logger.error(text)
+            else:
+                logger.warning(text)
+
     def _start_janitor(self) -> None:
         if self._janitor and not self._janitor.done():
             return
@@ -348,6 +416,7 @@ class MemoryEvoPlugin(Star):
         self._janitor = loop.create_task(
             self._janitor_loop(), name=f"{PLUGIN_NAME}-janitor"
         )
+        self._log("INFO", "janitor.start", "后台心跳已启动", interval=20)
 
     async def _janitor_loop(self) -> None:
         """后台心跳：空闲补写 + 向量补齐 + 主动消息检查。
@@ -362,8 +431,9 @@ class MemoryEvoPlugin(Star):
                 await self._janitor_tick()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 logger.exception("[memory_evo] janitor 本轮出错，已跳过继续下一轮")
+                self._log("ERROR", "janitor.fail", str(exc)[:200])
                 await asyncio.sleep(5)
 
     async def _janitor_tick(self) -> None:
@@ -394,7 +464,12 @@ class MemoryEvoPlugin(Star):
             if provider:
                 return provider
             self._warn_missing_provider("extract", provider_id)
-        return await self.context.get_using_provider_async(umo)
+        provider = await self.context.get_using_provider_async(umo)
+        if provider is None:
+            self._log(
+                "WARN", "provider.none", "没有可用模型，抽取与主动消息都会被跳过", umo=umo
+            )
+        return provider
 
     def _available_ids(self, embed: bool = False) -> list[str]:
         try:
@@ -513,11 +588,30 @@ class MemoryEvoPlugin(Star):
             logger.debug("[memory_evo] 没有可用 provider，跳过本次抽取")
             return {}
         timeout = float(self._get("llm_timeout", 45))
-        resp = await asyncio.wait_for(
-            provider.text_chat(prompt=prompt, system_prompt=system),
-            timeout=timeout,
+        started = time.time()
+        try:
+            resp = await asyncio.wait_for(
+                provider.text_chat(prompt=prompt, system_prompt=system),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            self._log("WARN", "llm.timeout", "模型调用超时", umo=umo, sec=timeout)
+            raise
+        except Exception as exc:
+            self._log("ERROR", "llm.fail", str(exc)[:200], umo=umo)
+            raise
+        text = getattr(resp, "completion_text", "") or ""
+        data = extractor.parse_json(text)
+        self._log(
+            "DEBUG",
+            "llm.ok",
+            "",
+            umo=umo,
+            ms=int((time.time() - started) * 1000),
+            chars=len(text),
+            parsed=bool(data),
         )
-        return extractor.parse_json(getattr(resp, "completion_text", "") or "")
+        return data
 
     # ---------------- 读：每轮注入 ----------------
 
@@ -566,8 +660,9 @@ class MemoryEvoPlugin(Star):
             if facts:
                 lines = [f"- {f.subject}|{f.predicate}：{f.object}" for f in facts]
                 blocks.append("<memory>\n" + "\n".join(lines) + "\n</memory>")
-        except Exception:
+        except Exception as exc:
             logger.exception("[memory_evo] 记忆召回失败")
+            self._log("ERROR", "recall.fail", str(exc)[:160], scope=scope)
 
         if self._get("persona_inject", True):
             try:
@@ -616,7 +711,12 @@ class MemoryEvoPlugin(Star):
             items = [(r, t) for r, t, _ in buf]
             buf.clear()
             transcript = extractor.build_transcript(items)
+            self._log(
+                "DEBUG", "flush.begin", "", scope=scope, reason=reason,
+                turns=len(items), chars=len(transcript),
+            )
             if not transcript.strip():
+                self._log("DEBUG", "flush.empty", "取到空对话，跳过", scope=scope)
                 return
 
             data = await self._ask(
@@ -642,6 +742,10 @@ class MemoryEvoPlugin(Star):
                 )
                 logger.debug(f"[memory_evo] fact#{fact_id} {action} ({reason}) scope={scope}")
             await self._embed_new(scope, pending_embeddings)
+            self._log(
+                "INFO", "flush.ok", "抽取完成", scope=scope, reason=reason,
+                turns=len(items), facts=len(pending_embeddings),
+            )
 
             if self._get("persona_evolve", True):
                 pens = await self._ask(
@@ -661,10 +765,16 @@ class MemoryEvoPlugin(Star):
                 await asyncio.to_thread(
                     self.store.save_persona, scope, traits, mood or state.get("mood", ""), why
                 )
+                changed = {k: round(v, 3) for k, v in deltas.items() if abs(v) > 0.001}
+                self._log(
+                    "INFO", "persona.evolve", why[:60], scope=scope, deltas=changed or None
+                )
         except asyncio.TimeoutError:
             logger.warning(f"[memory_evo] 抽取超时，本轮跳过 scope={scope}")
-        except Exception:
+            self._log("WARN", "flush.timeout", "抽取超时，本轮跳过", scope=scope, reason=reason)
+        except Exception as exc:
             logger.exception(f"[memory_evo] flush 失败 scope={scope} reason={reason}")
+            self._log("ERROR", "flush.fail", str(exc)[:200], scope=scope, reason=reason)
         finally:
             self.inflight.discard(scope)
 
@@ -697,12 +807,21 @@ class MemoryEvoPlugin(Star):
             if not enabled:
                 self._care_seen[scope] = {"at": time.time(), "reason": "disabled", "sent": False}
                 continue
+            prev = (self._care_seen.get(scope) or {}).get("reason")
             try:
                 sent, reason = await self._maybe_care(scope)
-            except Exception:
+            except Exception as exc:
                 logger.exception(f"[memory_evo] 主动消息检查失败 scope={scope}")
+                self._log("ERROR", "care.fail", str(exc)[:200], scope=scope)
                 sent, reason = False, "error"
             self._care_seen[scope] = {"at": time.time(), "reason": reason, "sent": bool(sent)}
+            if sent:
+                self._log("INFO", "care.sent", "已主动发送一条", scope=scope)
+            elif reason != prev:
+                self._log(
+                    "INFO", "care.skip", proactive.reason_text(reason),
+                    scope=scope, reason=reason,
+                )
 
     async def _maybe_care(self, scope: str, force: bool = False) -> tuple[bool, str]:
         """检查并（可能）主动发一条。返回 (是否已发送, 原因)。"""
@@ -739,6 +858,7 @@ class MemoryEvoPlugin(Star):
         sent = await self.context.send_message(scope, MessageChain([Plain(text)]))
         if not sent:
             logger.warning(f"[memory_evo] 主动消息发送失败（找不到平台） scope={scope}")
+            self._log("ERROR", "care.send_fail", "找不到这个会话的平台实例", scope=scope)
             return False, "send_failed"
         await asyncio.to_thread(
             self.store.mark_care_sent,
@@ -911,6 +1031,21 @@ class MemoryEvoPlugin(Star):
             yield event.plain_result(chr(10).join(body))
             return
 
+        if sub == "logs":
+            arg = parts[2].lower() if len(parts) > 2 else ""
+            if arg == "clear":
+                removed = await asyncio.to_thread(self.plog.clear)
+                yield event.plain_result(f"已清空 {removed} 个日志文件。")
+                return
+            count = int(arg) if arg.isdigit() else 20
+            records = await asyncio.to_thread(self.plog.tail, count)
+            if not records:
+                yield event.plain_result("还没有日志。")
+                return
+            lines = [plog.text_line(r, 160) for r in reversed(records)]
+            yield event.plain_result(chr(10).join(lines))
+            return
+
         if sub == "reindex":
             added = await self._backfill_embeddings(scope, limit=64)
             done, total = await asyncio.to_thread(
@@ -932,6 +1067,7 @@ class MemoryEvoPlugin(Star):
         yield event.plain_result(HELP_TEXT)
 
     async def terminate(self) -> None:
+        self._log("INFO", "plugin.stop", "插件卸载")
         if self._janitor and not self._janitor.done():
             self._janitor.cancel()
         for scope in list(self.buffers):

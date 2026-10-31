@@ -3,7 +3,7 @@
 > 一个不做向量库、不接云服务、只记「值得记的」的 AstrBot 长期记忆插件。
 > 面向**私聊陪伴**：记住这个人的偏好与约定，同时让性格在几十次对话里缓慢漂移。
 
-![version](https://img.shields.io/badge/version-v0.6.2-blue)
+![version](https://img.shields.io/badge/version-v0.7.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26-7c3aed)
@@ -59,8 +59,9 @@ AstrBot 已经有两套记忆相关的能力，但它们各自差一块：
 - **可观测、可撤销**：`/memory dump|why|forget|persona`，每次演化都有理由和版本号
 - **模型可用工具**：`memory_search` / `memory_write` / `memory_forget`，需要时自己查
 - **主动开口**：用户安静够久时，它会结合「记得的事 + 当前心情」自己发一条，而不是定时刷屏
-- **WebUI 面板**：记忆 / 人格 / 主动消息 / 设置四个页签，可搜可筛、可批量删可确认、可导出，配置项直接在面板里改（v0.5 → v0.6）
-- **离线可跑测试**：127 个用例不需要安装 AstrBot 也能执行
+- **WebUI 面板**：记忆 / 人格 / 主动消息 / 日志 / 设置五个页签，可搜可筛、可批量删可确认、可导出，配置项直接在面板里改（v0.5 → v0.7）
+- **自己的事件日志**：抽取、召回、人格演化、主动消息的每次判定都记一条，带事件名和结构化字段；面板「日志」页按级别筛、按关键词搜，`/memory logs` 也能直接看（v0.7）
+- **离线可跑测试**：166 个用例不需要安装 AstrBot 也能执行
 
 ---
 
@@ -210,6 +211,7 @@ git clone https://github.com/1244p/astrbot_plugin_memory_evo.git
 装完私聊发 `/memory` 看命令是否生效。
 
 数据落在 `data/plugin_data/astrbot_plugin_memory_evo/memory.db`，单文件，删掉即重置。
+事件日志落在同目录的 `logs/memory_evo-YYYYMMDD.log`，按天分文件、按 `log_days` 自动清理；它是 JSONL，`tail -f` 或者 `grep care.skip` 都能直接看。
 
 ---
 
@@ -321,7 +323,7 @@ care_schedule        = 09:00-12:00,19:00-23:00  → 只在这两段说
 | 记忆 | 有效 / 待确认 / 已取代条数、平均置信度、向量覆盖率、从未召回数；按关键词、类型、状态筛选并分页 | 勾选批量删除、批量确认待确认条目、导出该会话 JSON |
 | 人格 | 五维当前值（灰色刻度是基线）+ 演化时间线（版本、原因、当时取值） | 只读（改人格只能通过对话，这是故意的） |
 | 主动消息 | 本会话开关、今日已发 / 上限、连续未回应、下次最早**时刻**（`HH:MM` + 还要等多久）、卡在哪道闸门、免打扰与允许时段 | 开 / 关这个会话的主动消息 |
-| 设置 | 37 个配置项分六组：基础 / 注入与召回 / 人格 / 语义召回 / 主动消息 / 抽取模型，每项带说明与边界 | 全部可改，保存即生效（`db_path` 标「需重启」）；字段不合法会当场标红，整批不落盘 |
+| 设置 | 40 个配置项分七组：基础 / 注入与召回 / 人格 / 语义召回 / 主动消息 / 抽取模型 / 日志，每项带说明与边界 | 全部可改，保存即生效（`db_path` 标「需重启」）；字段不合法会当场标红，整批不落盘 |
 
 几个实现上的取舍：
 
@@ -348,6 +350,8 @@ care_schedule        = 09:00-12:00,19:00-23:00  → 只在这两段说
 | `/memory care [on/off/status/why/now]` | 主动开口的开关、状态、卡在哪、立即试发 |
 | `/memory forget <id\|词\|all>` | 删除记忆 |
 | `/memory persona` | 五维当前值 + 最近 5 次演化及理由 |
+| `/memory logs [n]` | 最近 n 条事件日志（默认 20），排查「为什么没抽 / 为什么没发」 |
+| `/memory logs clear` | 清空日志文件 |
 
 ## 给模型用的工具
 

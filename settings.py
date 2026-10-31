@@ -72,6 +72,7 @@ GROUPS: list[tuple[str, str, list[str]]] = [
         ],
     ),
     ("model", "抽取模型", ["extract_provider_id"]),
+    ("log", "日志", ["log_level", "log_days", "log_mirror"]),
 ]
 
 GROUP_TITLES = {gid: title for gid, title, _ in GROUPS}
@@ -84,6 +85,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "idle_seconds": (5, 600),
     "max_buffer": (5, 200),
     "llm_timeout": (5, 180),
+    "log_days": (1, 90),
     "min_confidence": (0.0, 1.0),
     "max_per_predicate": (1, 5),
     "max_item_chars": (20, 200),
