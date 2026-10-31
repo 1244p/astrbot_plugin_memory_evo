@@ -54,7 +54,8 @@ HELP_TEXT = (
     "/memory care 主动消息 on|off|status|why|now\n"
     "/memory forget <id|词|all> 删除\n"
     "/memory persona 查看人格状态与演化记录\n"
-    "/memory logs [n|clear] 最近的运行日志"
+    "/memory logs [n|clear] 最近的运行日志\n"
+    "/memory extract [buf|go] 看抽取过程（默认干跑）/ 真抽一次"
 )
 
 
@@ -616,6 +617,15 @@ class MemoryEvoPlugin(Star):
             raise
         text = getattr(resp, "completion_text", "") or ""
         data = extractor.parse_json(text)
+        self._log(
+            "DEBUG",
+            "llm.raw",
+            "",
+            umo=umo,
+            prompt_chars=len(prompt),
+            prompt_head=prompt[:200],
+            reply_head=text[:200] or None,
+        )
         if not data:
             self._log(
                 "WARN",
@@ -724,6 +734,60 @@ class MemoryEvoPlugin(Star):
         text = getattr(resp, "completion_text", "") or ""
         if text:
             self._remember_turn(event.unified_msg_origin, "assistant", text)
+
+    async def _extract_preview(self, scope: str, call_model: bool = True) -> str:
+        """把抽取过程摊开：缓冲 → 转写 → 提示词 → 模型原文 → 解析结果 → 拟写入。"""
+        buf = list(self.buffers.get(scope) or [])
+        user_turns = sum(1 for r, _, _ in buf if r == "user")
+        transcript = extractor.build_transcript([(r, t) for r, t, _ in buf])
+        body = [
+            f"缓冲 {len(buf)} 条（用户 {user_turns} 条，触发线 {int(self._get('flush_turns', 6))} 条）",
+            f"转写 {len(transcript)} 字（上限 4000）",
+        ]
+        if not transcript.strip():
+            body.append("缓冲是空的：先聊几句，或直接 /memory extract go 强制抽一次空缓冲（会跳过）。")
+            return chr(10).join(body)
+        if not call_model:
+            body.append("--- 转写开头 ---")
+            body.append(transcript[:400])
+            return chr(10).join(body)
+
+        known = await asyncio.to_thread(self.store.known_facts, scope, 8)
+        known_text = (
+            chr(10).join(f"  - {k['predicate']}：{k['object']}" for k in known)
+            if known
+            else "  （还没有任何记录）"
+        )
+        prompt = extractor.FACT_PROMPT.replace("__TRANSCRIPT__", transcript).replace(
+            "__KNOWN__", known_text
+        )
+        body.append(f"提示词 {len(prompt)} 字 / 已有记忆 {len(known)} 条")
+        try:
+            data, raw_text = await self._ask_with_text(scope, extractor.FACT_SYSTEM, prompt)
+        except Exception as exc:
+            body.append(f"调用失败：{str(exc)[:120]}")
+            return chr(10).join(body)
+
+        dropped: list[str] = []
+        facts = extractor.sanitize_facts(data, dropped=dropped)
+        body.append("--- 模型原文 " + str(len(raw_text or "")) + " 字 ---")
+        body.append((raw_text or "（空）")[:500])
+        if not facts:
+            why = "；".join(dropped[:3]) or "解析失败或结构不对"
+            body.append(f"结论：0 条可存 —— {why}")
+            return chr(10).join(body)
+
+        existing = {k["predicate"]: k["object"] for k in known}
+        body.append(f"结论：{len(facts)} 条可存")
+        for f in facts:
+            old = existing.get(f["predicate"])
+            act = f"覆盖旧值「{old}」" if old else "新增"
+            body.append(
+                f"- [{f['kind']}] {f['predicate']}：{f['object']}"
+                f"（重要度 {f['importance']} 置信 {f['confidence']:.2f}，{act}）"
+            )
+        body.append("这只是干跑，没有写库。要落库发：/memory extract go")
+        return chr(10).join(body)
 
     async def _flush(self, scope: str, reason: str = "manual") -> None:
         if scope in self.inflight:
@@ -991,6 +1055,26 @@ class MemoryEvoPlugin(Star):
         scope = event.unified_msg_origin
         parts = (event.message_str or "").split()
         sub = parts[1].lower() if len(parts) > 1 else ""
+
+        if sub == "extract":
+            arg = parts[2].lower() if len(parts) > 2 else ""
+            if arg == "go":
+                buf = self.buffers.get(scope)
+                if not buf:
+                    yield event.plain_result("缓冲是空的，没有可抽取的内容。")
+                    return
+                before = len(self.store.list_facts(scope, 999))
+                await self._flush(scope, reason="manual")
+                after = len(self.store.list_facts(scope, 999))
+                yield event.plain_result(
+                    f"已抽取：有效记忆 {before} → {after} 条（覆盖也算写入）。"
+                    + chr(10)
+                    + "详情见 /memory logs 或面板「日志」页的 flush.ok。"
+                )
+                return
+            text = await self._extract_preview(scope, call_model=(arg != "buf"))
+            yield event.plain_result(text)
+            return
 
         if sub == "dump":
             rows = await asyncio.to_thread(self.store.list_facts, scope, 50)
